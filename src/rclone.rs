@@ -140,11 +140,52 @@ impl Rclone {
         }
     }
 
-    pub fn listremotes(&self) -> Vec<String> {
-        match self.run(&["listremotes".into()]) {
-            Ok((true, out, _)) => out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+    /// Configured remotes as (name without colon, type), e.g. ("gdrive", "drive").
+    pub fn remotes(&self) -> Vec<(String, String)> {
+        match self.run(&["listremotes".into(), "--long".into()]) {
+            Ok((true, out, _)) => out
+                .lines()
+                .filter_map(|l| {
+                    let (n, t) = l.split_once(':')?;
+                    Some((n.trim().to_string(), t.trim().to_string()))
+                })
+                .filter(|(n, _)| !n.is_empty())
+                .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// Sub-folders of a remote path (one level), sorted.
+    pub fn list_dirs(&self, path: &str) -> Result<Vec<String>> {
+        let (ok, out, err) =
+            self.run(&["lsf".into(), "--dirs-only".into(), "--max-depth".into(), "1".into(), path.into()])?;
+        if !ok {
+            bail!("{}", err.trim());
+        }
+        let mut v: Vec<String> =
+            out.lines().map(|l| l.trim_end_matches('/').to_string()).filter(|l| !l.is_empty()).collect();
+        v.sort_by_key(|a| a.to_lowercase());
+        Ok(v)
+    }
+
+    /// Checks that a remote is reachable (lists its top level).
+    pub fn test_remote(&self, name: &str) -> Result<()> {
+        let (ok, _, err) =
+            self.run(&["lsf".into(), "--dirs-only".into(), "--max-depth".into(), "1".into(), format!("{name}:")])?;
+        if !ok {
+            bail!("{}", err.trim().lines().last().unwrap_or("Verbindung fehlgeschlagen"));
+        }
+        Ok(())
+    }
+
+    /// Starts `rclone config create <name> <type>` (opens the browser for OAuth providers).
+    pub fn spawn_config_create(&self, name: &str, typ: &str) -> Result<std::process::Child> {
+        let mut args = vec!["config".to_string(), "create".into(), name.into(), typ.into()];
+        if typ == "drive" {
+            args.push("scope=drive".into());
+        }
+        log::info(format!("rclone config create {name} {typ}"));
+        Ok(self.command(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?)
     }
 
     /// Recursive file listing. Returns Ok(None) if the directory does not exist.

@@ -327,6 +327,10 @@ pub fn run() -> Result<()> {
         std::thread::spawn(move || worker(rx, shared, proxy));
     }
 
+    if cfg.pairs.is_empty() {
+        // First start: open the setup assistant right away.
+        ipc::request_window(None);
+    }
     let mut app = App { tray: None, items, menu, shared, worker: tx };
     event_loop.run_app(&mut app)?;
     Ok(())

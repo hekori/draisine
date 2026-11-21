@@ -42,12 +42,16 @@ Neue Dateien, die es nur auf einer Seite gibt, werden kopiert. Beim ersten Sync 
 
 1-Weg-Sync spiegelt die Quelle: Dateien, die nur am Ziel liegen, werden gelöscht, abweichende überschrieben. Beides geschieht nur nach Bestätigung.
 
+Beim ersten Start (noch kein Ordnerpaar) öffnet sich automatisch ein Einrichtungsassistent. Er prüft rclone, legt bei Bedarf eine neue Verbindung an (Anmeldung im Browser über `rclone config create`) und führt zur Auswahl der Ordner.
+
 ## Bauen
 
 ```sh
 cargo build --release              # target/release/draisine
 cargo test                          # Unit-Tests
 cargo test -- --ignored --test-threads=1   # End-to-end mit echtem rclone (lokaler Ordner als "Remote")
+# Nur Debug-Builds, für Screenshots: DRAISINE_DEBUG_STEP=0..5 (Assistent), DRAISINE_DEBUG_PAGE=pairs|conn|log|settings,
+# DRAISINE_DEBUG_THEME=light, DRAISINE_DEBUG_CONFIRM=1
 scripts/package.sh                  # dist/draisine-<ver>-<os>-<arch>.tar.gz|zip, inkl. rclone
 ```
 
@@ -59,7 +63,10 @@ GitHub Actions (`.github/workflows/build.yml`) baut für Linux x86_64, Windows x
 ```
 src/main.rs     Einstieg: ohne Argumente Tray, mit --window [diff|pull|push|twoway] das Fenster
 src/tray.rs     Tray-Icon + Menü (tray-icon/winit), Auto-Sync-Worker, Benachrichtigungen
-src/gui.rs      Fenster (egui): Sync, Vorschau/Bestätigung, Einstellungen, Logs
+src/gui/        Fenster (egui): Übersicht, Vorschau/Bestätigung, Ordnerpaare, Verbindungen, Protokoll, Einstellungen
+  theme.rs      Farben (hell/dunkel nach System), Schrift (Noto Sans, eingebettet), Karten, Buttons, Schalter
+  wizard.rs     Einrichtungsassistent beim ersten Start (rclone → Anbieter → Browser-Anmeldung → Ordner)
+  browser.rs    Ordner-Browser für die Cloud
 src/engine.rs   Planung, Konflikte, Ausführung, Sync-Status, Sperre
 src/rclone.rs   rclone-Aufrufe (lsjson, check, copy, moveto, deletefile)
 src/config.rs   Konfiguration (TOML), Speicherorte, portabler Modus
