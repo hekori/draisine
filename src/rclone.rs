@@ -84,7 +84,7 @@ pub fn join(root: &str, rel: &str) -> String {
 impl Rclone {
     pub fn new(cfg: &Config) -> Result<Rclone> {
         let bin = find_binary(cfg).ok_or_else(|| {
-            anyhow!("rclone nicht gefunden. Lege rclone neben die Draisine-Datei oder installiere es (https://rclone.org/downloads/).")
+            anyhow!("rclone not found. Put rclone next to the Draisine program or install it (https://rclone.org/downloads/).")
         })?;
         let mut global = Vec::new();
         let conf = if !cfg.rclone_config.trim().is_empty() {
@@ -102,7 +102,7 @@ impl Rclone {
     }
 
     /// Makes [`Rclone::run`] calls abortable: once `c` is set, the running rclone process is
-    /// killed and every call fails with "Abgebrochen".
+    /// killed and every call fails with "Cancelled".
     pub fn with_cancel(mut self, c: Cancel) -> Rclone {
         self.cancel = Some(c);
         self
@@ -128,7 +128,7 @@ impl Rclone {
             return Ok((out.status.success(), stdout, stderr));
         }
         if self.cancelled() {
-            bail!("Abgebrochen");
+            bail!("Cancelled");
         }
         let mut child = self
             .command(args)
@@ -156,8 +156,8 @@ impl Rclone {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = (out_t.join(), err_t.join());
-                log::info("rclone abgebrochen");
-                bail!("Abgebrochen");
+                log::info("rclone cancelled");
+                bail!("Cancelled");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         };
@@ -229,7 +229,7 @@ impl Rclone {
         let (ok, _, err) =
             self.run(&["lsf".into(), "--dirs-only".into(), "--max-depth".into(), "1".into(), format!("{name}:")])?;
         if !ok {
-            bail!("{}", err.trim().lines().last().unwrap_or("Verbindung fehlgeschlagen"));
+            bail!("{}", err.trim().lines().last().unwrap_or("Connection failed"));
         }
         Ok(())
     }
@@ -256,7 +256,7 @@ impl Rclone {
         let page = dirs().runtime_dir.join("auth_page.html");
         match std::fs::write(&page, AUTH_PAGE) {
             Ok(()) => args.push(format!("config_template_file={}", page.display())),
-            Err(e) => log::info(format!("Anmeldeseite nicht geschrieben ({e}), nutze rclone-Standard")),
+            Err(e) => log::info(format!("Sign-in page not written ({e}), using rclone default")),
         }
         log::info(format!("rclone config create {name} {typ}"));
         Ok(self.command(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?)
@@ -275,9 +275,9 @@ impl Rclone {
             if err.to_lowercase().contains("directory not found") {
                 return Ok(None);
             }
-            bail!("Auflisten von {root} fehlgeschlagen:\n{}", err.trim());
+            bail!("Listing {root} failed:\n{}", err.trim());
         }
-        let items: Vec<LsJson> = serde_json::from_str(&out).context("lsjson-Ausgabe lesen")?;
+        let items: Vec<LsJson> = serde_json::from_str(&out).context("reading lsjson output")?;
         let mut map = Listing::new();
         for it in items.into_iter().filter(|i| !i.is_dir) {
             let mtime_ms = chrono::DateTime::parse_from_rfc3339(&it.mod_time)
@@ -314,7 +314,7 @@ impl Rclone {
         let _ = std::fs::remove_file(&combined);
         let (_ok, _out, err) = res?;
         if text.trim().is_empty() && !err.trim().is_empty() {
-            bail!("rclone check fehlgeschlagen:\n{}", err.trim());
+            bail!("rclone check failed:\n{}", err.trim());
         }
         Ok(text.lines().filter_map(|l| l.strip_prefix("= ")).map(str::to_string).collect())
     }
@@ -348,7 +348,7 @@ mod tests {
         let t = std::time::Instant::now();
         // Recursive listing of / runs far longer than the test allows.
         let r = rc.run(&["lsjson".into(), "-R".into(), "/".into()]);
-        assert!(r.is_err_and(|e| e.to_string() == "Abgebrochen"));
+        assert!(r.is_err_and(|e| e.to_string() == "Cancelled"));
         assert!(t.elapsed() < std::time::Duration::from_secs(2), "took {:?}", t.elapsed());
         // Later calls fail immediately without starting rclone.
         assert!(rc.run(&["version".into()]).is_err());

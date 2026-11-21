@@ -148,7 +148,7 @@ impl Config {
             Ok(s) => match toml::from_str(&s) {
                 Ok(c) => c,
                 Err(e) => {
-                    crate::log::error(format!("Konfiguration {} fehlerhaft: {e}", path.display()));
+                    crate::log::error(format!("Configuration {} is invalid: {e}", path.display()));
                     Config::default()
                 }
             },

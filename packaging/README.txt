@@ -1,43 +1,44 @@
-DRAISINE: sichere Synchronisation lokaler Ordner mit Google Drive & Co. (über rclone)
-===================================================================================
+DRAISINE: safe sync of local folders with Google Drive & co. (via rclone)
+=========================================================================
 
 Start
 -----
-  Linux:    ./draisine           (am besten in den Autostart legen)
+  Linux:    ./draisine           (best added to autostart)
   Windows:  draisine.exe
-  macOS:    Draisine.app         (beim ersten Start: Rechtsklick > Öffnen, die App ist nicht signiert)
+  macOS:    Draisine.app         (first start: right-click > Open, the app is not signed)
 
-Es erscheint ein Draisinen-Symbol im Tray / in der Menüleiste:
-  grau   = Auto-Sync aus          grün   = Auto-Sync an, alles gut
-  blau   = Sync läuft             orange = Änderungen warten auf deine Bestätigung
-  rot    = Fehler (siehe Log)
+A Draisine icon appears in the tray / menu bar:
+  grey   = auto-sync off          green  = auto-sync on, all good
+  blue   = sync running           orange = changes waiting for your confirmation
+  red    = error (see log)
 
-Linksklick öffnet das Fenster, Rechtsklick das Menü.
-GNOME braucht die Erweiterung "AppIndicator and KStatusNotifierItem Support".
+Left-click opens the window, right-click the menu.
+GNOME needs the extension "AppIndicator and KStatusNotifierItem Support".
 
-Erste Schritte
---------------
-1. Fenster > Einstellungen > rclone: Remote einrichten (z. B. Name "gdrive", Typ "drive").
-   Der Browser öffnet sich zur Anmeldung. Ein bereits eingerichtetes rclone wird automatisch genutzt.
-2. Ordnerpaar hinzufügen: lokaler Ordner + Remote-Pfad (z. B. gdrive:STEUER), Speichern.
-3. "Diff" zeigt die Unterschiede. "2-Wege-Sync" zeigt eine Vorschau; erst "Ausführen" ändert etwas.
+First steps
+-----------
+1. On first start the setup assistant opens. It checks rclone, lets you sign in to
+   your cloud storage in the browser and choose a local folder and a cloud folder.
+   An rclone that is already set up is used automatically.
+2. "Compare" (in the "•••" menu of a folder pair) shows the differences. Nothing is changed.
+3. "Sync" shows a preview; only "Apply" changes anything.
 
-Sicherheit
-----------
-- Vor jedem Löschen oder Überschreiben wirst du gefragt (Vorschau + Bestätigung).
-- Lokal gelöschte oder überschriebene Dateien landen im Papierkorb.
-- Konflikte (Datei auf beiden Seiten geändert): beide Versionen bleiben erhalten als
-    name-YYYY-MM-DDTHH-MM-SSZ-local.ext  und  name-YYYY-MM-DDTHH-MM-SSZ-remote.ext
-- Auto-Sync macht nur, was nichts zerstören kann (neue Dateien, Konflikte). Löschen und
-  Überschreiben wartet, bis du es bestätigst (Symbol wird orange).
-- Ist eine Seite plötzlich leer (nicht eingehängt, falscher Pfad), bricht der Sync ab.
+Safety
+------
+- Before anything is deleted or overwritten you are asked (preview + confirmation).
+- Files deleted or overwritten locally go to the trash.
+- Conflicts (file changed on both sides): both versions are kept as
+    name-YYYY-MM-DDTHH-MM-SSZ-local.ext  and  name-YYYY-MM-DDTHH-MM-SSZ-remote.ext
+- Auto-sync only does what cannot destroy anything (new files, conflicts). Deletes and
+  overwrites wait until you confirm them (the icon turns orange).
+- If one side is suddenly empty (not mounted, wrong path), the sync stops.
 
-Dateien in diesem Ordner
-------------------------
-  draisine / draisine.exe   die App
-  rclone / rclone.exe       das Transportwerkzeug (https://rclone.org), wird automatisch genutzt
-  rclone.conf               (optional) eigene rclone-Konfiguration, wird automatisch genutzt
-  draisine-data/            (optional) anlegen für den PORTABLEN Modus: dann liegen Einstellungen,
-                            Sync-Status und Logs hier statt im Benutzerprofil.
+Files in this folder
+--------------------
+  draisine / draisine.exe   the app
+  rclone / rclone.exe       the transfer tool (https://rclone.org), used automatically
+  rclone.conf               (optional) your own rclone configuration, used automatically
+  draisine-data/            (optional) create it for PORTABLE mode: settings, sync state
+                            and logs are then stored here instead of in your user profile.
 
-Logs: Menü > "Log öffnen (TXT)". Logs werden nie automatisch gelöscht.
+Logs: menu > "Open log (TXT)". Logs are never deleted automatically.

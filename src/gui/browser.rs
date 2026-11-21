@@ -55,7 +55,7 @@ impl RemoteBrowser {
     pub fn ui(&mut self, ui: &mut Ui, cfg: &Config, height: f32) {
         let p = pal(ui);
         if self.remote.is_empty() {
-            ui.label(theme::muted(ui, "Bitte zuerst eine Verbindung wählen."));
+            ui.label(theme::muted(ui, "Please choose a connection first."));
             return;
         }
         if self.loaded_for.as_ref() != Some(&(self.remote.clone(), self.path.clone())) {
@@ -98,18 +98,18 @@ impl RemoteBrowser {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 egui::ScrollArea::vertical().min_scrolled_height(height).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
-                    if !self.path.is_empty() && row(ui, "⬅", "eine Ebene höher", false).clicked() {
+                    if !self.path.is_empty() && row(ui, "⬅", "one level up", false).clicked() {
                         self.path = self.path.rsplit_once('/').map(|x| x.0.to_string()).unwrap_or_default();
                     }
                     if self.loading.is_some() {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.label(theme::muted(ui, "Lade Ordner …"));
+                            ui.label(theme::muted(ui, "Loading folders …"));
                         });
                     } else if !self.error.is_empty() {
                         ui.label(RichText::new(format!("✖ {}", self.error)).color(p.red));
                     } else if self.dirs.is_empty() {
-                        ui.label(theme::muted(ui, "Keine Unterordner."));
+                        ui.label(theme::muted(ui, "No subfolders."));
                     }
                     let mut go = None;
                     for d in &self.dirs {

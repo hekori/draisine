@@ -34,10 +34,10 @@ pub fn request_window(action: Option<Mode>) {
                 cmd.arg("--window");
                 crate::rclone::no_window(&mut cmd);
                 if let Err(e) = cmd.spawn() {
-                    crate::log::error(format!("Fenster starten fehlgeschlagen: {e}"));
+                    crate::log::error(format!("Starting the window failed: {e}"));
                 }
             }
-            Err(e) => crate::log::error(format!("Programmpfad unbekannt: {e}")),
+            Err(e) => crate::log::error(format!("Program path unknown: {e}")),
         }
     }
 }

@@ -47,7 +47,7 @@ pub fn tail(n: usize) -> String {
 pub fn open_today() {
     let f = today_file();
     if !f.exists() {
-        info("Log angelegt");
+        info("Log created");
     }
     if open::that_detached(&f).is_err() {
         let _ = open::that_detached(&crate::config::dirs().log_dir);

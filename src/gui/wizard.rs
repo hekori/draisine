@@ -20,7 +20,7 @@ pub enum Step {
     Done = 5,
 }
 
-const LABELS: [&str; 6] = ["Willkommen", "rclone", "Anbieter", "Anmelden", "Ordner", "Fertig"];
+const LABELS: [&str; 6] = ["Welcome", "rclone", "Provider", "Sign in", "Folders", "Done"];
 
 struct Provider {
     icon: &'static str,
@@ -35,7 +35,7 @@ const PROVIDERS: [Provider; 6] = [
     Provider { icon: "📦", name: "Dropbox", typ: "dropbox", default_name: "dropbox" },
     Provider { icon: "☁", name: "pCloud", typ: "pcloud", default_name: "pcloud" },
     Provider { icon: "📦", name: "Box", typ: "box", default_name: "box" },
-    Provider { icon: "⚙", name: "Andere …", typ: "", default_name: "" },
+    Provider { icon: "⚙", name: "Other …", typ: "", default_name: "" },
 ];
 
 pub enum Outcome {
@@ -217,7 +217,7 @@ impl Wizard {
         let mut out = Outcome::Continue;
         ui.horizontal(|ui| {
             let can_back = self.step > self.first && self.step != Step::Done && self.login_job.is_none();
-            if can_back && theme::secondary(ui, "Zurück").clicked() {
+            if can_back && theme::secondary(ui, "Back").clicked() {
                 self.step = match self.step {
                     Step::Rclone => Step::Welcome,
                     Step::Connection => Step::Rclone,
@@ -227,22 +227,22 @@ impl Wizard {
                     s => s,
                 };
             }
-            if self.step != Step::Done && theme::link(ui, "Abbrechen").clicked() {
+            if self.step != Step::Done && theme::link(ui, "Cancel").clicked() {
                 self.cancel_login();
                 out = Outcome::Cancel;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = match self.step {
-                    Step::Welcome => "Los geht's",
-                    Step::Folders => "Ordnerpaar anlegen",
-                    Step::Done => "Zur Übersicht",
-                    _ => "Weiter",
+                    Step::Welcome => "Let's go",
+                    Step::Folders => "Create folder pair",
+                    Step::Done => "Go to overview",
+                    _ => "Next",
                 };
                 if self.step == Step::Done {
                     if theme::secondary(ui, label).clicked() {
                         out = Outcome::Finished { diff_pair: None };
                     }
-                    if theme::primary(ui, "🔍  Unterschiede anzeigen").clicked() {
+                    if theme::primary(ui, "🔍  Show differences").clicked() {
                         out = Outcome::Finished { diff_pair: self.created_pair.clone() };
                     }
                     return;
@@ -252,7 +252,7 @@ impl Wizard {
                 }
                 if self.step == Step::Folders && self.first == Step::Connection {
                     // Started from "new connection": folders are optional.
-                    if theme::link(ui, "Ohne Ordnerpaar beenden").clicked() {
+                    if theme::link(ui, "Finish without a folder pair").clicked() {
                         out = Outcome::Finished { diff_pair: None };
                     }
                 }
@@ -283,12 +283,12 @@ impl Wizard {
                 let local = self.local.trim().to_string();
                 let name = if self.pair_name.trim().is_empty() { default_pair_name(&local) } else { self.pair_name.trim().into() };
                 let pair = Pair { name, local, remote: self.browser.full(), ..Default::default() };
-                log::info(format!("Ordnerpaar angelegt: {} ({} ↔ {})", pair.label(), pair.local, pair.remote));
+                log::info(format!("Folder pair created: {} ({} ↔ {})", pair.label(), pair.local, pair.remote));
                 self.created_pair = Some(pair.id.clone());
                 self.auto = cfg.auto_sync;
                 cfg.pairs.push(pair);
                 if let Err(e) = cfg.save() {
-                    log::error(format!("Konfiguration speichern: {e}"));
+                    log::error(format!("Saving configuration: {e}"));
                 }
                 Step::Done
             }
@@ -306,13 +306,13 @@ impl Wizard {
 
     fn welcome(&mut self, ui: &mut Ui) {
         let p = pal(ui);
-        ui.label(theme::bold("Willkommen bei Draisine", 26.0));
-        ui.label(theme::muted(ui, "In ein paar Schritten verbindest du einen Ordner auf deinem Rechner mit deinem Cloud-Speicher."));
+        ui.label(theme::bold("Welcome to Draisine", 26.0));
+        ui.label(theme::muted(ui, "In a few steps you'll connect a folder on your computer with your cloud storage."));
         ui.add_space(14.0);
         for (icon, title, text) in [
-            ("🔍", "Erst ansehen, dann handeln", "Vor jedem Sync siehst du genau, was passieren wird. Nichts wird gelöscht oder überschrieben, ohne dass du zustimmst."),
-            ("🛡", "Nichts geht verloren", "Gelöschte Dateien landen im Papierkorb. Wurde eine Datei auf beiden Seiten geändert, bleiben beide Versionen erhalten."),
-            ("🔄", "Läuft im Hintergrund", "Auf Wunsch synchronisiert Draisine automatisch und meldet sich, wenn deine Bestätigung gebraucht wird."),
+            ("🔍", "Look first, then act", "Before every sync you see exactly what will happen. Nothing is deleted or overwritten without your approval."),
+            ("🛡", "Nothing gets lost", "Deleted files go to the trash. If a file was changed on both sides, both versions are kept."),
+            ("🔄", "Runs in the background", "If you like, Draisine syncs automatically and lets you know when your confirmation is needed."),
         ] {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(icon).size(22.0).color(p.accent));
@@ -328,42 +328,42 @@ impl Wizard {
 
     fn rclone(&mut self, ui: &mut Ui, cfg: &Config) {
         let p = pal(ui);
-        ui.label(theme::bold("Transportwerkzeug prüfen", 22.0));
-        ui.label(theme::muted(ui, "Draisine nutzt rclone, um Dateien mit dem Cloud-Speicher auszutauschen."));
+        ui.label(theme::bold("Checking the transfer tool", 22.0));
+        ui.label(theme::muted(ui, "Draisine uses rclone to exchange files with your cloud storage."));
         ui.add_space(12.0);
         match &self.info {
             None => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Suche rclone …");
+                    ui.label("Looking for rclone …");
                 });
             }
             Some(Ok((v, remotes))) => {
                 theme::callout(ui, p.green, |ui| {
-                    ui.label(theme::bold("✔  rclone ist bereit", 15.0).color(p.green));
+                    ui.label(theme::bold("✔  rclone is ready", 15.0).color(p.green));
                     ui.label(theme::muted(ui, v));
                     if !remotes.is_empty() {
                         let names: Vec<String> = remotes.iter().map(|r| format!("{} ({})", r.0, r.1)).collect();
-                        ui.label(theme::muted(ui, format!("Vorhandene Verbindungen: {}", names.join(", "))));
+                        ui.label(theme::muted(ui, format!("Existing connections: {}", names.join(", "))));
                     }
                 });
             }
             Some(Err(e)) => {
                 theme::callout(ui, p.red, |ui| {
-                    ui.label(theme::bold("rclone wurde nicht gefunden", 15.0).color(p.red));
+                    ui.label(theme::bold("rclone was not found", 15.0).color(p.red));
                     ui.label(e.as_str());
                 });
                 ui.add_space(8.0);
-                ui.label("So geht's weiter:");
-                ui.label("1.  rclone von der offiziellen Seite herunterladen.");
-                ui.label("2.  Die Datei „rclone“ (Windows: „rclone.exe“) in denselben Ordner wie Draisine legen.");
-                ui.label("3.  Auf „Erneut prüfen“ klicken.");
+                ui.label("What to do:");
+                ui.label("1.  Download rclone from the official site.");
+                ui.label("2.  Put the file “rclone” (Windows: “rclone.exe”) in the same folder as Draisine.");
+                ui.label("3.  Click “Check again”.");
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if theme::secondary(ui, "🌐  rclone.org/downloads öffnen").clicked() {
+                    if theme::secondary(ui, "🌐  Open rclone.org/downloads").clicked() {
                         let _ = open::that_detached("https://rclone.org/downloads/");
                     }
-                    if theme::secondary(ui, "⟳  Erneut prüfen").clicked() {
+                    if theme::secondary(ui, "⟳  Check again").clicked() {
                         self.load_info(ui.ctx(), cfg);
                     }
                 });
@@ -373,11 +373,11 @@ impl Wizard {
 
     fn connection(&mut self, ui: &mut Ui) {
         let p = pal(ui);
-        ui.label(theme::bold("Mit welchem Cloud-Speicher verbinden?", 22.0));
+        ui.label(theme::bold("Which cloud storage do you want to connect?", 22.0));
         let remotes = self.remotes();
         if !remotes.is_empty() {
-            ui.label(theme::muted(ui, "Du kannst eine vorhandene Verbindung verwenden oder eine neue anlegen."));
-            theme::section(ui, "Vorhandene Verbindungen");
+            ui.label(theme::muted(ui, "You can use an existing connection or create a new one."));
+            theme::section(ui, "Existing connections");
             ui.horizontal_wrapped(|ui| {
                 for (n, t) in &remotes {
                     let sel = self.existing.as_deref() == Some(n.as_str());
@@ -387,9 +387,9 @@ impl Wizard {
                 }
             });
             ui.add_space(6.0);
-            theme::section(ui, "Neue Verbindung");
+            theme::section(ui, "New connection");
         } else {
-            ui.label(theme::muted(ui, "Wähle deinen Anbieter. Im nächsten Schritt meldest du dich im Browser an."));
+            ui.label(theme::muted(ui, "Choose your provider. In the next step you sign in in your browser."));
             ui.add_space(6.0);
         }
         ui.horizontal_wrapped(|ui| {
@@ -408,26 +408,26 @@ impl Wizard {
             ui.add_space(8.0);
             if PROVIDERS[self.provider].typ.is_empty() {
                 theme::callout(ui, p.blue, |ui| {
-                    ui.label(theme::bold("Andere Anbieter (WebDAV, S3, Nextcloud, SFTP …)", 14.5));
-                    ui.label("rclone unterstützt über 70 Anbieter. Richte sie einmalig im Terminal ein:");
+                    ui.label(theme::bold("Other providers (WebDAV, S3, Nextcloud, SFTP …)", 14.5));
+                    ui.label("rclone supports over 70 providers. Set yours up once in a terminal:");
                     ui.monospace("rclone config");
-                    ui.label("Danach einfach „Zurück“ und wieder „Weiter“: die neue Verbindung erscheint oben.");
-                    if theme::link(ui, "Anleitung auf rclone.org öffnen").clicked() {
+                    ui.label("Then click “Back” and “Next” again: the new connection appears above.");
+                    if theme::link(ui, "Open the guide on rclone.org").clicked() {
                         let _ = open::that_detached("https://rclone.org/docs/");
                     }
                 });
             } else {
                 ui.horizontal(|ui| {
-                    ui.label("Name der Verbindung");
+                    ui.label("Connection name");
                     ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(200.0));
                 });
                 let n = self.name.trim();
                 if !valid_name(n) {
-                    ui.label(RichText::new("Nur Buchstaben, Ziffern, - und _ verwenden.").color(p.orange).small());
+                    ui.label(RichText::new("Use only letters, digits, - and _.").color(p.orange).small());
                 } else if remotes.iter().any(|r| r.0 == n) {
-                    ui.label(RichText::new("Diesen Namen gibt es schon.").color(p.orange).small());
+                    ui.label(RichText::new("This name already exists.").color(p.orange).small());
                 } else {
-                    ui.label(theme::muted(ui, format!("Ordner werden später z. B. als „{n}:Dokumente“ angesprochen.")).small());
+                    ui.label(theme::muted(ui, format!("Folders will later be addressed as e.g. “{n}:Documents”.")).small());
                 }
             }
         }
@@ -436,33 +436,33 @@ impl Wizard {
     fn login(&mut self, ui: &mut Ui, cfg: &Config) {
         let p = pal(ui);
         let pr = &PROVIDERS[self.provider];
-        ui.label(theme::bold(format!("Bei {} anmelden", pr.name), 22.0));
-        ui.label(theme::muted(ui, "Dein Browser öffnet sich. Melde dich dort an und erlaube den Zugriff. Danach geht es hier automatisch weiter."));
+        ui.label(theme::bold(format!("Sign in to {}", pr.name), 22.0));
+        ui.label(theme::muted(ui, "Your browser will open. Sign in there and allow access. Then this continues automatically."));
         ui.add_space(12.0);
         match (&self.login, &self.login_job) {
             (_, Some(_)) => {
                 theme::callout(ui, p.blue, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(theme::bold("Warte auf die Anmeldung im Browser …", 15.0));
+                        ui.label(theme::bold("Waiting for sign-in in the browser …", 15.0));
                     });
-                    ui.label(theme::muted(ui, "Falls sich kein Browser geöffnet hat: im Log steht ein Link zum Kopieren."));
+                    ui.label(theme::muted(ui, "If no browser opened: the log contains a link you can copy."));
                 });
                 ui.add_space(6.0);
-                if theme::secondary(ui, "Abbrechen").clicked() {
+                if theme::secondary(ui, "Cancel").clicked() {
                     self.cancel_login();
                 }
             }
             (Some(Ok(())), None) => {
                 theme::callout(ui, p.green, |ui| {
-                    ui.label(theme::bold(format!("✔  Verbunden: {}", self.remote), 15.0).color(p.green));
-                    ui.label(theme::muted(ui, "Die Verbindung funktioniert. Weiter zur Ordnerauswahl."));
+                    ui.label(theme::bold(format!("✔  Connected: {}", self.remote), 15.0).color(p.green));
+                    ui.label(theme::muted(ui, "The connection works. Next: choose folders."));
                 });
             }
             (res, None) => {
                 if let Some(Err(e)) = res {
                     theme::callout(ui, p.red, |ui| {
-                        ui.label(theme::bold("Anmeldung nicht erfolgreich", 15.0).color(p.red));
+                        ui.label(theme::bold("Sign-in failed", 15.0).color(p.red));
                         ui.label(e.as_str());
                     });
                     ui.add_space(8.0);
@@ -470,12 +470,12 @@ impl Wizard {
                 if pr.typ == "drive" {
                     ui.label(theme::muted(
                         ui,
-                        "Hinweis: Google zeigt eventuell „Google hat diese App nicht überprüft“. Das ist bei rclone normal; \
-                         über „Erweitert“ ➡ „Weiter zu rclone“ geht es weiter.",
+                        "Note: Google may show “Google hasn't verified this app”. That is normal for rclone; \
+                         continue via “Advanced” ➡ “Go to rclone”.",
                     ));
                     ui.add_space(6.0);
                 }
-                let label = if res.is_some() { "🔑  Erneut versuchen" } else { "🔑  Im Browser anmelden" };
+                let label = if res.is_some() { "🔑  Try again" } else { "🔑  Sign in in browser" };
                 if theme::primary(ui, label).clicked() {
                     self.start_login(ui.ctx(), cfg);
                 }
@@ -497,7 +497,7 @@ impl Wizard {
                 match g.as_mut().map(|c| c.try_wait()) {
                     Some(Ok(Some(s))) => break s,
                     Some(Ok(None)) => continue,
-                    _ => return Err("Abgebrochen".into()),
+                    _ => return Err("Cancelled".into()),
                 }
             };
             let c = child.lock().unwrap().take();
@@ -517,22 +517,22 @@ impl Wizard {
                     // half-created remote: remove it so the user can retry cleanly
                     let _ = rc.run(&["config".into(), "delete".into(), name.clone()]);
                 }
-                let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("abgebrochen").to_string();
+                let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("cancelled").to_string();
                 return Err(last);
             }
-            rc.test_remote(&name).map_err(|e| format!("Verbindung angelegt, aber Test fehlgeschlagen: {e}"))
+            rc.test_remote(&name).map_err(|e| format!("Connection created, but the test failed: {e}"))
         }));
     }
 
     fn folders(&mut self, ui: &mut Ui, cfg: &Config) {
         let p = pal(ui);
-        ui.label(theme::bold("Welche Ordner sollen synchron bleiben?", 22.0));
-        ui.label(theme::muted(ui, "Wähle einen Ordner auf deinem Rechner und den passenden Ordner in der Cloud."));
+        ui.label(theme::bold("Which folders should stay in sync?", 22.0));
+        ui.label(theme::muted(ui, "Choose a folder on your computer and the matching folder in the cloud."));
         ui.add_space(10.0);
 
-        ui.label(theme::bold("💻  Auf diesem Rechner", 15.0));
+        ui.label(theme::bold("💻  On this computer", 15.0));
         ui.horizontal(|ui| {
-            let txt = if self.local.is_empty() { "noch kein Ordner gewählt".to_string() } else { self.local.clone() };
+            let txt = if self.local.is_empty() { "no folder chosen yet".to_string() } else { self.local.clone() };
             egui::Frame::new()
                 .fill(p.surface2)
                 .stroke(egui::Stroke::new(1.0, p.border))
@@ -542,8 +542,8 @@ impl Wizard {
                     ui.set_width((ui.available_width() - 170.0).max(100.0));
                     ui.label(if self.local.is_empty() { theme::muted(ui, txt) } else { RichText::new(txt) });
                 });
-            if theme::secondary(ui, "📂  Ordner wählen …").clicked()
-                && let Some(d) = rfd::FileDialog::new().set_title("Lokalen Ordner wählen").pick_folder() {
+            if theme::secondary(ui, "📂  Choose folder …").clicked()
+                && let Some(d) = rfd::FileDialog::new().set_title("Choose local folder").pick_folder() {
                     self.local = d.display().to_string();
                     if self.pair_name.is_empty() {
                         self.pair_name = default_pair_name(&self.local);
@@ -552,7 +552,7 @@ impl Wizard {
         });
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(theme::bold("☁  In der Cloud", 15.0));
+            ui.label(theme::bold("☁  In the cloud", 15.0));
             let remotes = self.remotes();
             if remotes.len() > 1 {
                 egui::ComboBox::from_id_salt("wiz-remote").selected_text(&self.remote).show_ui(ui, |ui| {
@@ -565,14 +565,14 @@ impl Wizard {
                 });
             }
         });
-        ui.label(theme::muted(ui, "Klicke dich zum gewünschten Ordner. Der angezeigte Ordner wird verwendet."));
+        ui.label(theme::muted(ui, "Click through to the folder you want. The folder shown is the one used."));
         self.browser.ui(ui, cfg, 200.0);
-        let shown = if self.browser.path.is_empty() { format!("{} (oberste Ebene)", self.browser.full()) } else { self.browser.full() };
-        ui.label(RichText::new(format!("Gewählt: {shown}")).color(p.accent));
+        let shown = if self.browser.path.is_empty() { format!("{} (top level)", self.browser.full()) } else { self.browser.full() };
+        ui.label(RichText::new(format!("Selected: {shown}")).color(p.accent));
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            ui.label("Name des Ordnerpaars");
-            ui.add(egui::TextEdit::singleline(&mut self.pair_name).desired_width(240.0).hint_text("z. B. Steuer"));
+            ui.label("Folder pair name");
+            ui.add(egui::TextEdit::singleline(&mut self.pair_name).desired_width(240.0).hint_text("e.g. Taxes"));
         });
     }
 
@@ -580,14 +580,14 @@ impl Wizard {
         let p = pal(ui);
         ui.vertical_centered(|ui| {
             ui.label(RichText::new("✔").size(44.0).color(p.green));
-            ui.label(theme::bold("Alles bereit!", 26.0));
+            ui.label(theme::bold("All set!", 26.0));
             if let Some(pair) = cfg.pairs.last() {
                 ui.label(theme::muted(ui, format!("{}  ↔  {}", pair.local, pair.remote)));
             }
         });
         ui.add_space(14.0);
-        ui.label(theme::bold("Wie geht es weiter?", 15.0));
-        ui.label("Empfehlung: Sieh dir zuerst die Unterschiede an. Dabei wird nichts verändert.");
+        ui.label(theme::bold("What's next?", 15.0));
+        ui.label("Recommendation: look at the differences first. Nothing is changed while you do.");
         ui.add_space(8.0);
         theme::card(ui, |ui| {
             ui.horizontal(|ui| {
@@ -596,11 +596,11 @@ impl Wizard {
                     let _ = cfg.save();
                 }
                 ui.vertical(|ui| {
-                    ui.label(theme::bold("Automatisch synchronisieren", 14.5));
+                    ui.label(theme::bold("Sync automatically", 14.5));
                     ui.label(theme::muted(
                         ui,
                         format!(
-                            "Alle {} Minuten im Hintergrund. Löschen und Überschreiben wartet immer auf dich.",
+                            "Every {} minutes in the background. Deletes and overwrites always wait for you.",
                             cfg.interval_minutes
                         ),
                     ));

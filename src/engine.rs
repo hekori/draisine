@@ -29,10 +29,10 @@ pub enum Mode {
 impl Mode {
     pub fn label(self) -> &'static str {
         match self {
-            Mode::Diff => "Diff lokal ↔ remote",
-            Mode::Pull => "1-Weg-Sync remote ➡ lokal",
-            Mode::Push => "1-Weg-Sync lokal ➡ remote",
-            Mode::TwoWay => "2-Wege-Sync lokal ↔ remote",
+            Mode::Diff => "Diff local ↔ remote",
+            Mode::Pull => "One-way sync remote ➡ local",
+            Mode::Push => "One-way sync local ➡ remote",
+            Mode::TwoWay => "Two-way sync local ↔ remote",
         }
     }
     pub fn arg(self) -> &'static str {
@@ -78,16 +78,16 @@ impl Action {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Action::CopyToRemote => "➡ hochladen",
-            Action::CopyToLocal => "⬅ herunterladen",
-            Action::OverwriteRemote => "➡ remote überschreiben",
-            Action::OverwriteLocal => "⬅ lokal überschreiben",
-            Action::DeleteRemote => "✖ remote löschen",
-            Action::DeleteLocal => "✖ lokal löschen (Papierkorb)",
-            Action::Conflict => "⚠ Konflikt: beide behalten",
-            Action::OnlyLocal => "nur lokal",
-            Action::OnlyRemote => "nur remote",
-            Action::Different => "unterschiedlich",
+            Action::CopyToRemote => "➡ upload",
+            Action::CopyToLocal => "⬅ download",
+            Action::OverwriteRemote => "➡ overwrite remote",
+            Action::OverwriteLocal => "⬅ overwrite local",
+            Action::DeleteRemote => "✖ delete remote",
+            Action::DeleteLocal => "✖ delete local (trash)",
+            Action::Conflict => "⚠ conflict: keep both",
+            Action::OnlyLocal => "local only",
+            Action::OnlyRemote => "remote only",
+            Action::Different => "different",
         }
     }
 }
@@ -163,7 +163,7 @@ fn save_state(pair: &Pair, st: &State) -> Result<()> {
 /// Forget the last sync: the next two-way sync behaves like a first sync (nothing is deleted).
 pub fn reset_state(pair: &Pair) {
     let _ = std::fs::remove_file(state_path(pair));
-    log::info(format!("[{}] Sync-Status zurückgesetzt", pair.label()));
+    log::info(format!("[{}] Sync state reset", pair.label()));
 }
 
 // ---------------------------------------------------------------- lock
@@ -180,7 +180,7 @@ pub fn lock(wait_secs: u64) -> Result<SyncLock> {
             Ok(()) => return Ok(SyncLock(f)),
             Err(std::fs::TryLockError::WouldBlock) => {
                 if start.elapsed().as_secs() >= wait_secs {
-                    bail!("Ein anderer Sync läuft gerade. Bitte später erneut versuchen.");
+                    bail!("Another sync is running. Please try again later.");
                 }
                 std::thread::sleep(std::time::Duration::from_millis(300));
             }
@@ -294,7 +294,7 @@ pub fn plan(cfg: &Config, pair: &Pair, mode: Mode) -> Result<Plan> {
 /// Like [`plan`], but stops (killing the running rclone) as soon as `cancel` is set.
 pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) -> Result<Plan> {
     if pair.local.trim().is_empty() || pair.remote.trim().is_empty() {
-        bail!("[{}] lokaler Ordner und Remote müssen gesetzt sein", pair.label());
+        bail!("[{}] local folder and remote must both be set", pair.label());
     }
     let mut rc = Rclone::new(cfg)?;
     if let Some(c) = cancel {
@@ -308,14 +308,14 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
     let had_l = st.files.values().filter(|e| e.l.is_some()).count();
     let had_r = st.files.values().filter(|e| e.r.is_some()).count();
     for (empty, missing, had, side) in [
-        (s.local.is_empty(), s.local_missing, had_l, "Lokaler Ordner"),
-        (s.remote.is_empty(), s.remote_missing, had_r, "Remote-Ordner"),
+        (s.local.is_empty(), s.local_missing, had_l, "Local folder"),
+        (s.remote.is_empty(), s.remote_missing, had_r, "Remote folder"),
     ] {
         if empty && had > 0 {
-            let what = if missing { "existiert nicht" } else { "ist leer" };
+            let what = if missing { "does not exist" } else { "is empty" };
             let msg = format!(
-                "{side} {what}, beim letzten Sync waren dort {had} Dateien. Abbruch zum Schutz \
-                 (nicht eingehängt? falscher Pfad?). Wenn das Absicht ist: Sync-Status zurücksetzen."
+                "{side} {what}, but it had {had} files at the last sync. Stopped as a precaution \
+                 (not mounted? wrong path?). If this is intended: reset the sync state."
             );
             if mode == Mode::Diff {
                 warnings.push(msg);
@@ -345,10 +345,10 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
                 (true, true, _) => both.push(p.to_string()),
                 (false, true, Mode::Diff) => items.push(item(p, Action::OnlyRemote, "")),
                 (true, false, Mode::Diff) => items.push(item(p, Action::OnlyLocal, "")),
-                (false, true, Mode::Pull) => items.push(item(p, Action::CopyToLocal, "nur remote vorhanden")),
-                (true, false, Mode::Pull) => items.push(item(p, Action::DeleteLocal, "nur lokal vorhanden")),
-                (true, false, _) => items.push(item(p, Action::CopyToRemote, "nur lokal vorhanden")),
-                (false, true, _) => items.push(item(p, Action::DeleteRemote, "nur remote vorhanden")),
+                (false, true, Mode::Pull) => items.push(item(p, Action::CopyToLocal, "exists only on remote")),
+                (true, false, Mode::Pull) => items.push(item(p, Action::DeleteLocal, "exists only locally")),
+                (true, false, _) => items.push(item(p, Action::CopyToRemote, "exists only locally")),
+                (false, true, _) => items.push(item(p, Action::DeleteRemote, "exists only on remote")),
                 (false, false, _) => {}
             }
         }
@@ -359,13 +359,13 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
                 continue;
             }
             let (l, r) = (s.local[&p], s.remote[&p]);
-            let newer = if l.mtime_ms > r.mtime_ms { "lokal neuer" } else { "remote neuer" };
+            let newer = if l.mtime_ms > r.mtime_ms { "local newer" } else { "remote newer" };
             let action = match mode {
                 Mode::Diff => Action::Different,
                 Mode::Pull => Action::OverwriteLocal,
                 _ => Action::OverwriteRemote,
             };
-            items.push(item(&p, action, &format!("Inhalt unterschiedlich, {newer}")));
+            items.push(item(&p, action, &format!("content differs, {newer}")));
         }
     } else {
         let mut both_changed = Vec::new();
@@ -375,26 +375,26 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
             let rc_ = change(s.remote.get(p), prev.and_then(|e| e.r));
             use Ch::*;
             let lr = |c: Ch, side: &str| match c {
-                New => format!("{side} neu"),
-                Modified => format!("{side} geändert"),
-                Deleted => format!("{side} gelöscht"),
+                New => format!("{side} new"),
+                Modified => format!("{side} changed"),
+                Deleted => format!("{side} deleted"),
                 _ => String::new(),
             };
             match (lc, rc_) {
                 (Absent, Absent) => {}
                 (Unchanged, Unchanged) => in_sync.push(p.clone()),
                 (Deleted, Deleted) | (Deleted, Absent) | (Absent, Deleted) => in_sync.push(p.clone()),
-                (Unchanged, Deleted) => items.push(item(p, Action::DeleteLocal, "remote gelöscht")),
-                (Deleted, Unchanged) => items.push(item(p, Action::DeleteRemote, "lokal gelöscht")),
-                (New | Modified, Unchanged) => items.push(item(p, Action::OverwriteRemote, &lr(lc, "lokal"))),
+                (Unchanged, Deleted) => items.push(item(p, Action::DeleteLocal, "deleted on remote")),
+                (Deleted, Unchanged) => items.push(item(p, Action::DeleteRemote, "deleted locally")),
+                (New | Modified, Unchanged) => items.push(item(p, Action::OverwriteRemote, &lr(lc, "local"))),
                 (Unchanged, New | Modified) => items.push(item(p, Action::OverwriteLocal, &lr(rc_, "remote"))),
-                (New | Modified | Unchanged, Absent) => items.push(item(p, Action::CopyToRemote, "nur lokal vorhanden")),
-                (Absent, New | Modified | Unchanged) => items.push(item(p, Action::CopyToLocal, "nur remote vorhanden")),
+                (New | Modified | Unchanged, Absent) => items.push(item(p, Action::CopyToRemote, "exists only locally")),
+                (Absent, New | Modified | Unchanged) => items.push(item(p, Action::CopyToLocal, "exists only on remote")),
                 (New | Modified, Deleted) => {
-                    items.push(item(p, Action::CopyToRemote, &format!("{}, remote gelöscht: wiederherstellen", lr(lc, "lokal"))))
+                    items.push(item(p, Action::CopyToRemote, &format!("{}, deleted on remote: restore", lr(lc, "local"))))
                 }
                 (Deleted, New | Modified) => {
-                    items.push(item(p, Action::CopyToLocal, &format!("{}, lokal gelöscht: wiederherstellen", lr(rc_, "remote"))))
+                    items.push(item(p, Action::CopyToLocal, &format!("{}, deleted locally: restore", lr(rc_, "remote"))))
                 }
                 (New | Modified, New | Modified) => both_changed.push((p.clone(), lc, rc_)),
             }
@@ -405,8 +405,8 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
             if same.contains(&p) {
                 in_sync.push(p);
             } else {
-                let what = |c| if c == Ch::New { "neu" } else { "geändert" };
-                items.push(item(&p, Action::Conflict, &format!("lokal {} und remote {}", what(lc), what(rc_))));
+                let what = |c| if c == Ch::New { "new" } else { "changed" };
+                items.push(item(&p, Action::Conflict, &format!("local {} and remote {}", what(lc), what(rc_))));
             }
         }
     }
@@ -416,8 +416,8 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
     let total = s.local.len().max(s.remote.len()).max(1);
     if deletes > 0 && deletes * 100 > total * cfg.max_delete_percent as usize {
         warnings.push(format!(
-            "{deletes} von {total} Dateien ({} %) würden gelöscht, mehr als {} %. Die Löschungen sind \
-             deshalb nicht vorausgewählt: bitte genau prüfen.",
+            "{deletes} of {total} files ({} %) would be deleted, more than {} %. The deletions are \
+             therefore not preselected: please check carefully.",
             deletes * 100 / total,
             cfg.max_delete_percent
         ));
@@ -450,12 +450,12 @@ pub struct Report {
 
 impl Report {
     pub fn summary(&self) -> String {
-        let mut s = format!("{} Aktionen ausgeführt", self.done);
+        let mut s = format!("{} actions applied", self.done);
         if !self.conflicts.is_empty() {
-            s += &format!(", {} Konflikte (Konfliktdateien angelegt)", self.conflicts.len());
+            s += &format!(", {} conflicts (conflict files created)", self.conflicts.len());
         }
         if !self.failed.is_empty() {
-            s += &format!(", {} fehlgeschlagen", self.failed.len());
+            s += &format!(", {} failed", self.failed.len());
         }
         s
     }
@@ -465,21 +465,21 @@ impl Report {
 /// longer match (files changed since the preview).
 pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> Result<Report> {
     if planned.mode == Mode::Diff {
-        bail!("Diff führt keine Aktionen aus");
+        bail!("Diff does not apply any actions");
     }
     let _lock = lock(10)?;
     let pair = &planned.pair;
     let label = pair.label();
     let selected: Vec<&Item> = planned.items.iter().filter(|i| i.selected && i.action.executable()).collect();
 
-    progress("Prüfe, ob sich seit der Vorschau etwas geändert hat …");
+    progress("Checking whether anything changed since the preview …");
     let fresh = plan(cfg, pair, planned.mode)?;
     let fresh_set: HashSet<(&str, Action)> = fresh.items.iter().map(|i| (i.path.as_str(), i.action)).collect();
     let stale: Vec<&str> =
         selected.iter().filter(|i| !fresh_set.contains(&(i.path.as_str(), i.action))).map(|i| i.path.as_str()).collect();
     if !stale.is_empty() {
         bail!(
-            "[{label}] Seit der Vorschau haben sich Dateien geändert ({}). Nichts ausgeführt, bitte neu prüfen.",
+            "[{label}] Files changed since the preview ({}). Nothing applied, please check again.",
             stale.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
         );
     }
@@ -492,7 +492,7 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
     let mut to_remote: Vec<String> = Vec::new();
     let mut to_local: Vec<String> = Vec::new();
     let backup = pair.remote_backup.trim();
-    log::info(format!("[{label}] {} gestartet: {} Aktionen", planned.mode.label(), selected.len()));
+    log::info(format!("[{label}] {} started: {} actions", planned.mode.label(), selected.len()));
 
     let fail = |report: &mut Report, path: &str, msg: String| {
         log::error(format!("[{label}] {path}: {msg}"));
@@ -511,7 +511,7 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
                 touched.push(p.into());
             }
             Action::OverwriteRemote => {
-                log::info(format!("[{label}] remote überschreiben: {p}"));
+                log::info(format!("[{label}] overwrite remote: {p}"));
                 to_remote.push(p.into());
                 touched.push(p.into());
             }
@@ -519,23 +519,23 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
                 // Old local version goes to the trash first; if that fails, do not overwrite.
                 match trash::delete(local_path(pair, p)) {
                     Ok(()) => {
-                        log::info(format!("[{label}] lokal in Papierkorb (wird ersetzt): {p}"));
+                        log::info(format!("[{label}] local to trash (being replaced): {p}"));
                         to_local.push(p.into());
                         touched.push(p.into());
                     }
-                    Err(e) => fail(&mut report, p, format!("Papierkorb fehlgeschlagen, nicht überschrieben: {e}")),
+                    Err(e) => fail(&mut report, p, format!("Moving to trash failed, not overwritten: {e}")),
                 }
             }
             Action::DeleteLocal => match trash::delete(local_path(pair, p)) {
                 Ok(()) => {
-                    log::info(format!("[{label}] lokal in Papierkorb: {p}"));
+                    log::info(format!("[{label}] local to trash: {p}"));
                     report.done += 1;
                     touched.push(p.into());
                 }
-                Err(e) => fail(&mut report, p, format!("Papierkorb fehlgeschlagen: {e}")),
+                Err(e) => fail(&mut report, p, format!("Moving to trash failed: {e}")),
             },
             Action::DeleteRemote => {
-                progress(&format!("lösche remote {p}"));
+                progress(&format!("deleting remote {p}"));
                 let args: Vec<String> = if backup.is_empty() {
                     vec!["deletefile".into(), join(&pair.remote, p)]
                 } else {
@@ -543,11 +543,11 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
                 };
                 match rc.run_logged(&args, &mut |_| {}) {
                     Ok(true) => {
-                        log::info(format!("[{label}] remote gelöscht: {p}"));
+                        log::info(format!("[{label}] deleted on remote: {p}"));
                         report.done += 1;
                         touched.push(p.into());
                     }
-                    Ok(false) => fail(&mut report, p, "remote löschen fehlgeschlagen".into()),
+                    Ok(false) => fail(&mut report, p, "deleting on remote failed".into()),
                     Err(e) => fail(&mut report, p, e.to_string()),
                 }
             }
@@ -562,13 +562,13 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
                     k += 1;
                 }
                 if let Err(e) = std::fs::rename(local_path(pair, p), local_path(pair, &ln)) {
-                    fail(&mut report, p, format!("Konflikt: lokal umbenennen fehlgeschlagen: {e}"));
+                    fail(&mut report, p, format!("Conflict: renaming local failed: {e}"));
                     continue;
                 }
                 let args = vec!["moveto".into(), join(&pair.remote, p), join(&pair.remote, &rn)];
                 match rc.run_logged(&args, &mut |_| {}) {
                     Ok(true) => {
-                        log::warn(format!("[{label}] Konflikt {p} -> {ln} + {rn}"));
+                        log::warn(format!("[{label}] conflict {p} -> {ln} + {rn}"));
                         to_remote.push(ln.clone());
                         to_local.push(rn.clone());
                         touched.extend([p.to_string(), ln.clone(), rn.clone()]);
@@ -576,7 +576,7 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
                     }
                     _ => {
                         let _ = std::fs::rename(local_path(pair, &ln), local_path(pair, p));
-                        fail(&mut report, p, "Konflikt: remote umbenennen fehlgeschlagen".into());
+                        fail(&mut report, p, "Conflict: renaming remote failed".into());
                     }
                 }
             }
@@ -585,21 +585,21 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
     }
 
     let bdir = (!backup.is_empty()).then(|| join(backup, &ts));
-    progress(&format!("lade {} Dateien hoch …", to_remote.len()));
+    progress(&format!("uploading {} files …", to_remote.len()));
     let up = copy_batch(&rc, &to_remote, &lroot, &pair.remote, bdir, progress);
-    progress(&format!("lade {} Dateien herunter …", to_local.len()));
+    progress(&format!("downloading {} files …", to_local.len()));
     let down = copy_batch(&rc, &to_local, &pair.remote, &lroot, None, progress);
-    for (r, what) in [(up, "Hochladen"), (down, "Herunterladen")] {
+    for (r, what) in [(up, "Upload"), (down, "Download")] {
         match r {
             Ok(true) => {}
-            Ok(false) => log::error(format!("[{label}] {what}: rclone meldete Fehler (Details oben im Log)")),
+            Ok(false) => log::error(format!("[{label}] {what}: rclone reported errors (details above in the log)")),
             Err(e) => log::error(format!("[{label}] {what}: {e}")),
         }
     }
 
     // Record the new state for everything that is consistent now; skipped/failed paths keep
     // their old state so they show up again next time.
-    progress("aktualisiere Sync-Status …");
+    progress("updating sync state …");
     let after = list_sides(&rc, pair)?;
     let mut st = load_state(pair);
     let mut copied = HashSet::new();
@@ -622,16 +622,16 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
                 report.done += 1;
             }
         } else if touched.contains(p) && !report.failed.iter().any(|f| f.starts_with(&format!("{p}:"))) {
-            report.failed.push(format!("{p}: nach dem Sync nicht auf beiden Seiten gleich"));
+            report.failed.push(format!("{p}: not identical on both sides after the sync"));
         }
     }
     report.done += report.conflicts.len();
     st.last_sync = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
     st.last_result = format!("{}: {}", planned.mode.label(), report.summary());
-    save_state(pair, &st).context("Sync-Status speichern")?;
-    log::info(format!("[{label}] fertig: {}", report.summary()));
+    save_state(pair, &st).context("saving sync state")?;
+    log::info(format!("[{label}] done: {}", report.summary()));
     for f in &report.failed {
-        log::error(format!("[{label}] fehlgeschlagen: {f}"));
+        log::error(format!("[{label}] failed: {f}"));
     }
     Ok(report)
 }
@@ -824,7 +824,7 @@ mod tests {
         fs::remove_dir_all(&r).unwrap();
         fs::create_dir_all(&r).unwrap();
         let e = plan(&cfg, &pair, Mode::TwoWay).unwrap_err().to_string();
-        assert!(e.contains("Remote-Ordner ist leer"), "{e}");
+        assert!(e.contains("Remote folder is empty"), "{e}");
 
         reset_state(&pair);
         let _ = fs::remove_dir_all(&base);

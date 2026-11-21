@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ if .OK }}Draisine – Verbunden{{ else }}Draisine – Anmeldung fehlgeschlagen{{ end }}</title>
+<title>{{ if .OK }}Draisine – Connected{{ else }}Draisine – Sign-in failed{{ end }}</title>
 <style>
   :root {
     --bg: #f4f5f7; --surface: #ffffff; --border: #dfe2e8; --text: #1c2027; --muted: #6b7280;
@@ -50,22 +50,22 @@
   <div class="icon ok" aria-hidden="true">
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
   </div>
-  <h1>Verbindung hergestellt</h1>
-  <p>Draisine hat jetzt Zugriff auf dein Konto.</p>
-  <p class="hint">Du kannst dieses Fenster jetzt schließen und zu Draisine zurückkehren.</p>
+  <h1>Connected</h1>
+  <p>Draisine now has access to your account.</p>
+  <p class="hint">You can close this window now and return to Draisine.</p>
 {{ else }}
   <div class="icon err" aria-hidden="true">
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>
   </div>
-  <h1>Anmeldung fehlgeschlagen</h1>
-  <p>Draisine konnte nicht mit deinem Konto verbunden werden.</p>
+  <h1>Sign-in failed</h1>
+  <p>Draisine could not connect to your account.</p>
   <div class="details">
-    <div><strong>Fehler:</strong> {{ .Name }}</div>
-    {{ if .Description }}<div><strong>Beschreibung:</strong> {{ .Description }}</div>{{ end }}
+    <div><strong>Error:</strong> {{ .Name }}</div>
+    {{ if .Description }}<div><strong>Description:</strong> {{ .Description }}</div>{{ end }}
     {{ if .Code }}<div><strong>Code:</strong> {{ .Code }}</div>{{ end }}
-    {{ if .HelpURL }}<div><strong>Hilfe:</strong> <a href="{{ .HelpURL }}">{{ .HelpURL }}</a></div>{{ end }}
+    {{ if .HelpURL }}<div><strong>Help:</strong> <a href="{{ .HelpURL }}">{{ .HelpURL }}</a></div>{{ end }}
   </div>
-  <p class="hint">Schließe dieses Fenster und versuche es in Draisine erneut.</p>
+  <p class="hint">Close this window and try again in Draisine.</p>
 {{ end }}
   <div class="brand">Draisine</div>
 </main>

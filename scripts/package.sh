@@ -65,7 +65,7 @@ else
   cp "$RCLONE_BIN" "$OUT/"
   chmod +x "$OUT/"* 2>/dev/null || true
 fi
-cp packaging/LIESMICH.txt "$OUT/"
+cp packaging/README.txt "$OUT/"
 
 echo "== archive"
 cd dist

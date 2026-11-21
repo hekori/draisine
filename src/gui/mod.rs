@@ -44,7 +44,6 @@ impl<T: Send + 'static> Bg<T> {
 #[derive(PartialEq, Clone, Copy)]
 enum Page {
     Overview,
-    Pairs,
     Connections,
     Log,
     Settings,
@@ -77,7 +76,7 @@ struct App {
     job: Job,
     wizard: Option<Wizard>,
     plans_job: Option<Bg<(Mode, Plans)>>,
-    /// Set by „Abbrechen“ while planning: kills the running rclone and drops the result.
+    /// Set by “Cancel” while planning: kills the running rclone and drops the result.
     plan_cancel: Option<Cancel>,
     exec_job: Option<Bg<Results>>,
     progress: Arc<Mutex<Vec<String>>>,
@@ -113,7 +112,7 @@ pub fn run(action: Option<Mode>) -> anyhow::Result<()> {
         ..Default::default()
     };
     eframe::run_native(APP_NAME, opts, Box::new(move |cc| Ok(Box::new(App::new(cc, action)))))
-        .map_err(|e| anyhow::anyhow!("Fenster: {e}"))
+        .map_err(|e| anyhow::anyhow!("Window: {e}"))
 }
 
 // ------------------------------------------------------------------ formatting helpers
@@ -130,7 +129,7 @@ fn human(n: i64) -> String {
 
 fn when(e: &Entry) -> String {
     chrono::DateTime::from_timestamp_millis(e.mtime_ms)
-        .map(|t| t.with_timezone(&chrono::Local).format("%d.%m.%Y %H:%M").to_string())
+        .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default()
 }
 
@@ -144,24 +143,24 @@ fn action_color(p: &Pal, a: Action) -> Color32 {
 }
 
 const GROUPS: [(Action, &str, &str); 10] = [
-    (Action::Conflict, "Konflikte", "Auf beiden Seiten geändert. Beide Versionen werden als Konfliktdateien behalten."),
-    (Action::DeleteLocal, "Auf diesem Rechner löschen", "Die Dateien kommen in den Papierkorb."),
-    (Action::DeleteRemote, "In der Cloud löschen", "Landen im Backup-Ordner bzw. Papierkorb des Anbieters."),
-    (Action::OverwriteLocal, "Auf diesem Rechner ersetzen", "Die alte Version kommt in den Papierkorb."),
-    (Action::OverwriteRemote, "In der Cloud ersetzen", "Alte Version: Backup-Ordner bzw. Versionen des Anbieters."),
-    (Action::CopyToRemote, "Hochladen", "Neu in der Cloud."),
-    (Action::CopyToLocal, "Herunterladen", "Neu auf diesem Rechner."),
-    (Action::Different, "Unterschiedlich", "Gleicher Name, anderer Inhalt."),
-    (Action::OnlyLocal, "Nur auf diesem Rechner", ""),
-    (Action::OnlyRemote, "Nur in der Cloud", ""),
+    (Action::Conflict, "Conflicts", "Changed on both sides. Both versions are kept as conflict files."),
+    (Action::DeleteLocal, "Delete on this computer", "The files go to the trash."),
+    (Action::DeleteRemote, "Delete in the cloud", "They go to the backup folder or the provider's trash."),
+    (Action::OverwriteLocal, "Replace on this computer", "The old version goes to the trash."),
+    (Action::OverwriteRemote, "Replace in the cloud", "Old version: backup folder or the provider's version history."),
+    (Action::CopyToRemote, "Upload", "New in the cloud."),
+    (Action::CopyToLocal, "Download", "New on this computer."),
+    (Action::Different, "Different", "Same name, different content."),
+    (Action::OnlyLocal, "Only on this computer", ""),
+    (Action::OnlyRemote, "Only in the cloud", ""),
 ];
 
 fn mode_title(m: Mode) -> &'static str {
     match m {
-        Mode::Diff => "Unterschiede",
-        Mode::Pull => "Cloud ➡ dieser Rechner",
-        Mode::Push => "Dieser Rechner ➡ Cloud",
-        Mode::TwoWay => "Synchronisieren",
+        Mode::Diff => "Differences",
+        Mode::Pull => "Cloud ➡ this computer",
+        Mode::Push => "This computer ➡ cloud",
+        Mode::TwoWay => "Sync",
     }
 }
 
@@ -212,7 +211,6 @@ impl App {
         #[cfg(debug_assertions)]
         if let Ok(pg) = std::env::var("DRAISINE_DEBUG_PAGE") {
             app.page = match pg.as_str() {
-                "pairs" => Page::Pairs,
                 "conn" => Page::Connections,
                 "log" => Page::Log,
                 "settings" => Page::Settings,
@@ -236,7 +234,7 @@ impl App {
     fn save(&mut self) {
         match self.cfg.save() {
             Ok(()) => self.saved = self.cfg.clone(),
-            Err(e) => self.flash(format!("Speichern fehlgeschlagen: {e}")),
+            Err(e) => self.flash(format!("Saving failed: {e}")),
         }
     }
 
@@ -268,11 +266,11 @@ impl App {
         self.confirm = false;
         self.filter.clear();
         if pairs.is_empty() {
-            self.job = Job::Review(mode, vec![Err("Kein aktives Ordnerpaar. Lege unter „Ordnerpaare“ eines an.".into())]);
+            self.job = Job::Review(mode, vec![Err("No active folder pair. Add one in the overview.".into())]);
             return;
         }
         self.job = Job::Planning(mode);
-        log::info(format!("Vorschau: {}", mode.label()));
+        log::info(format!("Preview: {}", mode.label()));
         let cfg = self.cfg.clone();
         let cancel: Cancel = Default::default();
         self.plan_cancel = Some(cancel.clone());
@@ -281,7 +279,7 @@ impl App {
                 .iter()
                 .map(|p| {
                     engine::plan_with(&cfg, p, mode, Some(cancel.clone())).map_err(|e| {
-                        log::error(format!("[{}] Vorschau fehlgeschlagen: {e:#}", p.label()));
+                        log::error(format!("[{}] Preview failed: {e:#}", p.label()));
                         format!("{e:#}")
                     })
                 })
@@ -298,8 +296,8 @@ impl App {
         // The worker thread finishes on its own within ~100 ms; its result is ignored.
         self.plans_job = None;
         self.job = Job::None;
-        log::info("Vergleich abgebrochen");
-        self.flash("Vergleich abgebrochen");
+        log::info("Comparison cancelled");
+        self.flash("Comparison cancelled");
     }
 
     fn start_execute(&mut self, ctx: &egui::Context) {
@@ -405,11 +403,10 @@ impl App {
             _ => 0,
         };
         for (pg, icon, label, badge) in [
-            (Page::Overview, "🏠", "Übersicht", pending),
-            (Page::Pairs, "↔", "Ordnerpaare", 0),
-            (Page::Connections, "☁", "Verbindungen", 0),
-            (Page::Log, "📄", "Protokoll", 0),
-            (Page::Settings, "⚙", "Einstellungen", 0),
+            (Page::Overview, "🏠", "Overview", pending),
+            (Page::Connections, "☁", "Connections", 0),
+            (Page::Log, "📄", "Log", 0),
+            (Page::Settings, "⚙", "Settings", 0),
         ] {
             if theme::nav_item(ui, icon, label, self.page == pg, badge).clicked() {
                 self.page = pg;
@@ -424,15 +421,15 @@ impl App {
                 let mut on = self.cfg.auto_sync;
                 if theme::toggle(ui, &mut on).changed() {
                     self.cfg.auto_sync = on;
-                    log::info(format!("Auto-Sync {}", if on { "an" } else { "aus" }));
+                    log::info(format!("Auto-Sync {}", if on { "on" } else { "off" }));
                     self.save();
                 }
                 ui.label(theme::bold("Auto-Sync", 14.0));
             });
             let t = if self.cfg.auto_sync {
-                format!("alle {} min im Hintergrund", self.cfg.interval_minutes)
+                format!("every {} min in the background", self.cfg.interval_minutes)
             } else {
-                "aus: nur manuell".into()
+                "off: manual only".into()
             };
             ui.label(theme::muted(ui, t).small());
         });
@@ -450,11 +447,11 @@ impl App {
                 theme::card(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(theme::bold("Vergleiche diesen Rechner mit der Cloud …", 15.0));
+                        ui.label(theme::bold("Comparing this computer with the cloud …", 15.0));
                     });
-                    ui.label(theme::muted(ui, "Bei vielen Dateien kann das einen Moment dauern. Es wird noch nichts verändert."));
+                    ui.label(theme::muted(ui, "With many files this can take a while. Nothing is changed yet."));
                     ui.add_space(8.0);
-                    if theme::secondary(ui, "Abbrechen").on_hover_text("Vergleich stoppen. Es wurde nichts verändert.").clicked() {
+                    if theme::secondary(ui, "Cancel").on_hover_text("Stop comparing. Nothing has been changed.").clicked() {
                         self.cancel_plan();
                     }
                 });
@@ -468,7 +465,7 @@ impl App {
                 theme::card(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(theme::bold("Wird ausgeführt …", 16.0));
+                        ui.label(theme::bold("Running …", 16.0));
                     });
                     let last = lines.iter().rev().find(|l| !l.starts_with("──")).cloned().unwrap_or_default();
                     ui.label(theme::muted(ui, last));
@@ -487,16 +484,16 @@ impl App {
             Job::None => {}
         }
 
-        theme::page_header(ui, "Übersicht", "Deine synchronisierten Ordner");
+        theme::page_header(ui, "Overview", "Your synced folders");
         if self.cfg.pairs.is_empty() {
             ui.add_space(30.0);
             ui.vertical_centered(|ui| {
                 ui.add(egui::Image::new((self.logo.id(), vec2(96.0, 96.0))));
                 ui.add_space(8.0);
-                ui.label(theme::bold("Noch keine Ordner verbunden", 22.0));
-                ui.label(theme::muted(ui, "Der Einrichtungsassistent führt dich in wenigen Schritten durch alles."));
+                ui.label(theme::bold("No folders connected yet", 22.0));
+                ui.label(theme::muted(ui, "The setup assistant walks you through everything in a few steps."));
                 ui.add_space(12.0);
-                if theme::primary(ui, "✨  Einrichtung starten").clicked() {
+                if theme::primary(ui, "✨  Start setup").clicked() {
                     self.wizard = Some(Wizard::new(Step::Welcome, false));
                 }
             });
@@ -505,27 +502,77 @@ impl App {
         let ctx = ui.ctx().clone();
         let any_enabled = self.cfg.pairs.iter().any(|p| p.enabled);
         ui.horizontal(|ui| {
-            if theme::primary_enabled(ui, any_enabled, "↔  Alle synchronisieren").clicked() {
+            if theme::primary_enabled(ui, any_enabled, "↔  Sync all").clicked() {
                 self.start_plan(&ctx, Mode::TwoWay, None);
             }
-            if theme::secondary_enabled(ui, any_enabled, "🔍  Alle vergleichen").clicked() {
+            if theme::secondary_enabled(ui, any_enabled, "🔍  Compare all").clicked() {
                 self.start_plan(&ctx, Mode::Diff, None);
             }
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::secondary(ui, "➕  Add folder pair").clicked() {
+                    self.edit = None;
+                    self.wizard = Some(Wizard::new(Step::Connection, false));
+                }
+            });
         });
         ui.add_space(6.0);
+        let remotes: Vec<String> = match &self.rinfo {
+            Some(Ok((_, r))) => r.iter().map(|x| x.0.clone()).collect(),
+            _ => Vec::new(),
+        };
+        let cfg_snapshot = self.cfg.clone();
         let mut action: Option<(Mode, String)> = None;
-        let mut toggled = false;
+        let (mut toggled, mut save_edit, mut cancel_edit) = (false, false, false);
+        let (mut start_edit, mut reset) = (None, None);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for pair in self.cfg.pairs.iter_mut() {
+            for (i, pair) in self.cfg.pairs.iter_mut().enumerate() {
                 theme::card(ui, |ui| {
+                    if let Some(ed) = self.edit.as_mut().filter(|e| e.index == i) {
+                        (save_edit, cancel_edit) = edit_form(ui, &p, ed, pair, &remotes, &cfg_snapshot);
+                        return;
+                    }
                     ui.horizontal(|ui| {
                         ui.label(theme::bold(pair.label(), 17.0));
                         if !pair.enabled {
-                            theme::badge(ui, "pausiert", p.muted);
+                            theme::badge(ui, "paused", p.muted);
                         }
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            let id = pair.id.clone();
+                            ui.menu_button(RichText::new("•••").size(13.0), |ui| {
+                                for (m, label, hint) in [
+                                    (Mode::Diff, "🔍  Compare", "Only show differences, change nothing"),
+                                    (Mode::Pull, "⬇  Cloud ➡ this computer", "One-way: this computer becomes a mirror of the cloud"),
+                                    (Mode::Push, "⬆  This computer ➡ cloud", "One-way: the cloud becomes a mirror of this computer"),
+                                ] {
+                                    if ui.button(label).on_hover_text(hint).clicked() {
+                                        action = Some((m, id.clone()));
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("✏  Edit").clicked() {
+                                    start_edit = Some(i);
+                                    ui.close();
+                                }
+                                if ui
+                                    .button("↺  Reset sync state")
+                                    .on_hover_text("Forgets the last sync. The next sync behaves like the first one: nothing is deleted.")
+                                    .clicked()
+                                {
+                                    reset = Some(i);
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if ui.button(RichText::new("🗑  Remove").color(p.red)).clicked() {
+                                    self.delete_pair = Some(i);
+                                    ui.close();
+                                }
+                            })
+                            .response
+                            .on_hover_text("Compare, one-way sync, edit, remove, …");
+                            ui.add_space(4.0);
                             if theme::toggle(ui, &mut pair.enabled)
-                                .on_hover_text("Aktiv: wird bei „Alle …“ und beim Auto-Sync berücksichtigt")
+                                .on_hover_text("Active: included in “Sync all”, “Compare all” and auto-sync")
                                 .changed()
                             {
                                 toggled = true;
@@ -534,38 +581,49 @@ impl App {
                     });
                     theme::path_line(ui, "💻", &pair.local);
                     theme::path_line(ui, "☁", &pair.remote);
+                    if !pair.excludes.is_empty() {
+                        ui.label(theme::muted(ui, format!("Excluded: {}", pair.excludes.join(", "))).small());
+                    }
+                    if !pair.remote_backup.is_empty() {
+                        ui.label(theme::muted(ui, format!("Backup: {}", pair.remote_backup)).small());
+                    }
                     let (t, r) = engine::last_status(pair);
                     match t {
-                        Some(t) => ui.label(RichText::new(format!("🕓  Zuletzt {t}  ·  {r}")).size(13.0)),
-                        None => ui.label(RichText::new("🕓  Noch nie synchronisiert").size(13.0).color(p.orange)),
+                        Some(t) => ui.label(RichText::new(format!("🕓  Last synced {t}  ·  {r}")).size(13.0)),
+                        None => ui.label(RichText::new("🕓  Never synced").size(13.0).color(p.orange)),
                     };
                     ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        if theme::primary(ui, "↔  Synchronisieren").on_hover_text("2-Wege-Sync: Änderungen von beiden Seiten übernehmen").clicked() {
-                            action = Some((Mode::TwoWay, pair.id.clone()));
-                        }
-                        if theme::secondary(ui, "🔍  Vergleichen").on_hover_text("Nur Unterschiede anzeigen, nichts ändern").clicked() {
-                            action = Some((Mode::Diff, pair.id.clone()));
-                        }
-                        if theme::secondary(ui, "⬇  Cloud ➡ Rechner")
-                            .on_hover_text("1-Weg: dieser Rechner wird zum Spiegel der Cloud")
-                            .clicked()
-                        {
-                            action = Some((Mode::Pull, pair.id.clone()));
-                        }
-                        if theme::secondary(ui, "⬆  Rechner ➡ Cloud")
-                            .on_hover_text("1-Weg: die Cloud wird zum Spiegel dieses Rechners")
-                            .clicked()
-                        {
-                            action = Some((Mode::Push, pair.id.clone()));
-                        }
-                    });
+                    if theme::primary(ui, "↔  Sync").on_hover_text("Two-way sync: take over changes from both sides").clicked() {
+                        action = Some((Mode::TwoWay, pair.id.clone()));
+                    }
                 });
                 ui.add_space(4.0);
             }
         });
         if toggled {
             self.save();
+        }
+        if let Some(i) = start_edit {
+            let d = self.cfg.pairs[i].clone();
+            self.edit = Some(Edit { index: i, browser: RemoteBrowser::new("", ""), draft: d, browse: false });
+        }
+        if cancel_edit {
+            self.edit = None;
+        }
+        if save_edit
+            && let Some(mut ed) = self.edit.take() {
+                ed.draft.excludes = ed.draft.excludes.iter().map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
+                ed.draft.local = ed.draft.local.trim().into();
+                ed.draft.remote = ed.draft.remote.trim().into();
+                ed.draft.remote_backup = ed.draft.remote_backup.trim().into();
+                log::info(format!("Folder pair changed: {}", ed.draft.label()));
+                self.cfg.pairs[ed.index] = ed.draft;
+                self.save();
+                self.flash("Saved");
+            }
+        if let Some(i) = reset {
+            engine::reset_state(&self.cfg.pairs[i]);
+            self.flash("Sync state reset");
         }
         if let Some((m, id)) = action {
             self.start_plan(&ctx, m, Some(vec![id]));
@@ -587,23 +645,23 @@ impl App {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             if mode == Mode::Diff {
-                ui.label(theme::muted(ui, format!("{total} Unterschiede · es wurde nichts verändert")));
+                ui.label(theme::muted(ui, format!("{total} differences · nothing has been changed")));
             } else {
-                ui.label(theme::bold(format!("{sel} von {total} Änderungen ausgewählt"), 14.5));
+                ui.label(theme::bold(format!("{sel} of {total} changes selected"), 14.5));
                 if destr > 0 {
-                    theme::badge(ui, &format!("{destr} löschen/ersetzen"), p.red);
+                    theme::badge(ui, &format!("{destr} delete/replace"), p.red);
                 }
             }
             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                 if mode == Mode::Diff {
-                    if theme::primary_enabled(ui, total > 0, "↔  Jetzt synchronisieren …").clicked() {
+                    if theme::primary_enabled(ui, total > 0, "↔  Sync now …").clicked() {
                         self.start_plan(&ctx, Mode::TwoWay, Some(ids.clone()));
                     }
-                    if theme::secondary(ui, "Schließen").clicked() {
+                    if theme::secondary(ui, "Close").clicked() {
                         self.job = Job::None;
                     }
                 } else {
-                    let label = if sel == 0 { "Ausführen".to_string() } else { format!("▶  {sel} Änderungen ausführen") };
+                    let label = if sel == 0 { "Apply".to_string() } else { format!("▶  Apply {sel} changes") };
                     if theme::primary_enabled(ui, sel > 0, &label).clicked() {
                         if destr > 0 {
                             self.confirm = true;
@@ -611,10 +669,10 @@ impl App {
                             self.start_execute(&ctx);
                         }
                     }
-                    if theme::secondary(ui, "⟳  Neu prüfen").clicked() {
+                    if theme::secondary(ui, "⟳  Check again").clicked() {
                         self.start_plan(&ctx, mode, Some(ids.clone()));
                     }
-                    if theme::link(ui, "Abbrechen").clicked() {
+                    if theme::link(ui, "Cancel").clicked() {
                         self.job = Job::None;
                     }
                 }
@@ -628,11 +686,11 @@ impl App {
         let Job::Review(mode, plans) = &mut self.job else { return };
         let mode = *mode;
         let sub = if mode == Mode::Diff {
-            "Nur eine Ansicht: es wird nichts verändert."
+            "View only: nothing will be changed."
         } else {
-            "Noch wurde nichts verändert. Prüfe die Liste und klicke dann unten auf „Ausführen“."
+            "Nothing has been changed yet. Check the list, then click “Apply” below."
         };
-        theme::page_header(ui, &format!("Vorschau: {}", mode_title(mode)), sub);
+        theme::page_header(ui, &format!("Preview: {}", mode_title(mode)), sub);
 
         // Summary chips
         ui.horizontal_wrapped(|ui| {
@@ -643,12 +701,12 @@ impl App {
                 }
             }
             let same: usize = plans.iter().filter_map(|x| x.as_ref().ok()).map(|pl| pl.in_sync.len()).sum();
-            theme::badge(ui, &format!("{same}  bereits gleich"), p.muted);
+            theme::badge(ui, &format!("{same}  already identical"), p.muted);
         });
         ui.add_space(4.0);
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
-                .hint_text("🔍  Dateien filtern …")
+                .hint_text("🔍  Filter files …")
                 .desired_width(320.0)
                 .margin(Margin::symmetric(10, 6)),
         );
@@ -661,7 +719,7 @@ impl App {
                     Ok(pl) => pl,
                     Err(e) => {
                         theme::callout(ui, p.red, |ui| {
-                            ui.label(theme::bold("Vergleich fehlgeschlagen", 15.0).color(p.red));
+                            ui.label(theme::bold("Comparison failed", 15.0).color(p.red));
                             ui.label(e.as_str());
                         });
                         ui.add_space(6.0);
@@ -670,8 +728,8 @@ impl App {
                 };
                 theme::card(ui, |ui| {
                     ui.label(theme::bold(plan.pair.label(), 17.0));
-                    theme::path_line(ui, "💻", &format!("{}   ·  {} Dateien", plan.pair.local, plan.local_files));
-                    theme::path_line(ui, "☁", &format!("{}   ·  {} Dateien", plan.pair.remote, plan.remote_files));
+                    theme::path_line(ui, "💻", &format!("{}   ·  {} files", plan.pair.local, plan.local_files));
+                    theme::path_line(ui, "☁", &format!("{}   ·  {} files", plan.pair.remote, plan.remote_files));
                     for w in &plan.warnings {
                         theme::callout(ui, p.orange, |ui| {
                             ui.label(RichText::new(format!("⚠  {w}")).color(p.orange));
@@ -679,7 +737,7 @@ impl App {
                     }
                     if plan.items.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(theme::bold("✔  Alles synchron, nichts zu tun.", 15.0).color(p.green));
+                        ui.label(theme::bold("✔  Everything in sync, nothing to do.", 15.0).color(p.green));
                         return;
                     }
                     for (a, title, desc) in GROUPS {
@@ -725,7 +783,7 @@ impl App {
                                     file_row(ui, &p, &mut plan.items[i], mode != Mode::Diff);
                                 }
                                 if idx.len() > MAX {
-                                    ui.label(theme::muted(ui, format!("… und {} weitere (Filter nutzen)", idx.len() - MAX)));
+                                    ui.label(theme::muted(ui, format!("… and {} more (use the filter)", idx.len() - MAX)));
                                 }
                             });
                     }
@@ -753,19 +811,19 @@ impl App {
         egui::Modal::new(egui::Id::unique("draisine-confirm")).show(ctx, |ui| {
             let p = pal(ui);
             ui.set_width(560.0);
-            ui.label(theme::bold("Wirklich löschen bzw. ersetzen?", 21.0));
+            ui.label(theme::bold("Really delete or replace?", 21.0));
             ui.add_space(6.0);
             for (a, what) in [
-                (Action::DeleteLocal, "auf diesem Rechner löschen (➡ Papierkorb)"),
-                (Action::OverwriteLocal, "auf diesem Rechner ersetzen (alte Version ➡ Papierkorb)"),
-                (Action::DeleteRemote, "in der Cloud löschen"),
-                (Action::OverwriteRemote, "in der Cloud ersetzen"),
+                (Action::DeleteLocal, "delete on this computer (➡ trash)"),
+                (Action::OverwriteLocal, "replace on this computer (old version ➡ trash)"),
+                (Action::DeleteRemote, "delete in the cloud"),
+                (Action::OverwriteRemote, "replace in the cloud"),
             ] {
                 let n = items.iter().filter(|i| i.1 == a).count();
                 if n > 0 {
                     ui.horizontal(|ui| {
                         theme::badge(ui, &n.to_string(), action_color(&p, a));
-                        ui.label(format!("Dateien {what}"));
+                        ui.label(format!("files to {what}"));
                     });
                 }
             }
@@ -781,15 +839,15 @@ impl App {
             ui.add_space(6.0);
             ui.label(theme::muted(
                 ui,
-                "In der Cloud gelöschte oder ersetzte Dateien landen im Backup-Ordner des Ordnerpaars (falls gesetzt), \
-                 sonst im Papierkorb bzw. in den Versionen des Anbieters.",
+                "Files deleted or replaced in the cloud go to the folder pair's backup folder (if set), \
+                 otherwise to the provider's trash or version history.",
             ).small());
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if theme::danger(ui, "Ja, ausführen").clicked() {
+                if theme::danger(ui, "Yes, apply").clicked() {
                     go = Some(true);
                 }
-                if theme::secondary(ui, "Abbrechen").clicked() {
+                if theme::secondary(ui, "Cancel").clicked() {
                     go = Some(false);
                 }
             });
@@ -812,9 +870,9 @@ impl App {
             theme::card(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (icon, c, t) = if failed {
-                        ("⚠", p.orange, "Fertig, aber nicht alles hat geklappt")
+                        ("⚠", p.orange, "Done, but not everything worked")
                     } else {
-                        ("✔", p.green, "Fertig")
+                        ("✔", p.green, "Done")
                     };
                     ui.label(RichText::new(icon).size(30.0).color(c));
                     ui.label(theme::bold(t, 21.0));
@@ -839,7 +897,7 @@ impl App {
             if conflicts > 0 {
                 ui.add_space(8.0);
                 theme::callout(ui, p.orange, |ui| {
-                    ui.label(theme::bold(format!("⚠  {conflicts} Konflikt(e): beide Versionen wurden behalten"), 15.0).color(p.orange));
+                    ui.label(theme::bold(format!("⚠  {conflicts} conflict(s): both versions were kept"), 15.0).color(p.orange));
                     for r in results.iter().filter_map(|r| r.as_ref().ok()) {
                         for (orig, l, rr) in &r.1.conflicts {
                             ui.label(RichText::new(format!("{orig}\n    ➡ {l}\n    ➡ {rr}")).size(13.0));
@@ -847,13 +905,13 @@ impl App {
                     }
                     ui.add_space(4.0);
                     ui.label(
-                        "So löst du einen Konflikt: Öffne beide Dateien, benenne die richtige wieder in den \
-                         Originalnamen um und lösche die andere. Beim nächsten Sync wird das übernommen.",
+                        "To resolve a conflict: open both files, rename the correct one back to the \
+                         original name and delete the other. The next sync picks that up.",
                     );
                 });
             }
             ui.add_space(12.0);
-            if theme::primary(ui, "Fertig").clicked() {
+            if theme::primary(ui, "Done").clicked() {
                 close = true;
             }
         });
@@ -864,149 +922,6 @@ impl App {
 
     // ------------------------------------------------------------------ pairs
 
-    fn pairs_page(&mut self, ui: &mut Ui) {
-        let p = pal(ui);
-        theme::page_header(ui, "Ordnerpaare", "Welcher Ordner auf diesem Rechner gehört zu welchem Ordner in der Cloud");
-        if theme::primary(ui, "➕  Ordnerpaar hinzufügen").clicked() {
-            self.wizard = Some(Wizard::new(Step::Connection, false));
-            return;
-        }
-        ui.add_space(6.0);
-        let remotes: Vec<String> = match &self.rinfo {
-            Some(Ok((_, r))) => r.iter().map(|x| x.0.clone()).collect(),
-            _ => Vec::new(),
-        };
-        let mut save_edit = false;
-        let mut cancel_edit = false;
-        let mut start_edit = None;
-        let mut reset = None;
-        let mut toggled = false;
-        let cfg_snapshot = self.cfg.clone();
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for (i, pair) in self.cfg.pairs.iter_mut().enumerate() {
-                theme::card(ui, |ui| {
-                    if let Some(ed) = self.edit.as_mut().filter(|e| e.index == i) {
-                        let d = &mut ed.draft;
-                        ui.label(theme::bold("Ordnerpaar bearbeiten", 17.0));
-                        ui.add_space(4.0);
-                        field(ui, "Name");
-                        ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(f32::INFINITY));
-                        field(ui, "💻  Ordner auf diesem Rechner");
-                        ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut d.local).desired_width(ui.available_width() - 130.0));
-                            if theme::secondary(ui, "📂  Wählen …").clicked()
-                                && let Some(f) = rfd::FileDialog::new().pick_folder() {
-                                    d.local = f.display().to_string();
-                                }
-                        });
-                        field(ui, "☁  Ordner in der Cloud");
-                        ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut d.remote).desired_width(ui.available_width() - 150.0));
-                            if theme::secondary(ui, if ed.browse { "Fertig" } else { "☁  Durchsuchen …" }).clicked() {
-                                ed.browse = !ed.browse;
-                                if ed.browse {
-                                    let (r, path) = d.remote.split_once(':').unwrap_or((remotes.first().map(String::as_str).unwrap_or(""), ""));
-                                    ed.browser = RemoteBrowser::new(r, path);
-                                }
-                            }
-                        });
-                        if ed.browse {
-                            ed.browser.ui(ui, &cfg_snapshot, 180.0);
-                            d.remote = ed.browser.full();
-                        }
-                        egui::CollapsingHeader::new("Erweitert").default_open(false).show(ui, |ui| {
-                            field(ui, "Backup-Ordner in der Cloud (optional)");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.remote_backup)
-                                    .desired_width(f32::INFINITY)
-                                    .hint_text("z. B. gdrive:_draisine-backup  (leer = Papierkorb/Versionen des Anbieters)"),
-                            );
-                            ui.label(theme::muted(ui, "Muss auf derselben Verbindung, aber außerhalb des synchronisierten Ordners liegen.").small());
-                            field(ui, "Ausschließen (ein Muster pro Zeile)");
-                            let mut s = d.excludes.join("\n");
-                            if ui.add(egui::TextEdit::multiline(&mut s).desired_rows(3).desired_width(f32::INFINITY).hint_text("z. B. 2020/GEHALT/**\n*.tmp")).changed() {
-                                d.excludes = s.split('\n').map(str::to_string).collect();
-                            }
-                        });
-                        if d.signature() != pair.signature() {
-                            theme::callout(ui, p.blue, |ui| {
-                                ui.label(RichText::new("ℹ  Ordner oder Ausschlüsse geändert: der nächste Sync verhält sich wie ein erster Sync (nichts wird gelöscht).").size(13.0));
-                            });
-                        }
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            let ok = !d.local.trim().is_empty() && d.remote.contains(':');
-                            if theme::primary_enabled(ui, ok, "Speichern").clicked() {
-                                save_edit = true;
-                            }
-                            if theme::secondary(ui, "Abbrechen").clicked() {
-                                cancel_edit = true;
-                            }
-                        });
-                        return;
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(theme::bold(pair.label(), 17.0));
-                        if !pair.enabled {
-                            theme::badge(ui, "pausiert", p.muted);
-                        }
-                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            toggled |= theme::toggle(ui, &mut pair.enabled).on_hover_text("aktiv / pausiert").changed();
-                        });
-                    });
-                    theme::path_line(ui, "💻", &pair.local);
-                    theme::path_line(ui, "☁", &pair.remote);
-                    if !pair.excludes.is_empty() {
-                        ui.label(theme::muted(ui, format!("Ausgeschlossen: {}", pair.excludes.join(", "))).small());
-                    }
-                    if !pair.remote_backup.is_empty() {
-                        ui.label(theme::muted(ui, format!("Backup: {}", pair.remote_backup)).small());
-                    }
-                    ui.horizontal(|ui| {
-                        if theme::secondary(ui, "✏  Bearbeiten").clicked() {
-                            start_edit = Some(i);
-                        }
-                        if theme::secondary(ui, "🗑  Entfernen").clicked() {
-                            self.delete_pair = Some(i);
-                        }
-                        if theme::link(ui, "Sync-Status zurücksetzen")
-                            .on_hover_text("Vergisst den letzten Sync. Der nächste Sync verhält sich wie der erste: nichts wird gelöscht.")
-                            .clicked()
-                        {
-                            reset = Some(i);
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-            }
-        });
-        if toggled {
-            self.save();
-        }
-        if let Some(i) = start_edit {
-            let d = self.cfg.pairs[i].clone();
-            self.edit = Some(Edit { index: i, browser: RemoteBrowser::new("", ""), draft: d, browse: false });
-        }
-        if cancel_edit {
-            self.edit = None;
-        }
-        if save_edit
-            && let Some(mut ed) = self.edit.take() {
-                ed.draft.excludes = ed.draft.excludes.iter().map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
-                ed.draft.local = ed.draft.local.trim().into();
-                ed.draft.remote = ed.draft.remote.trim().into();
-                ed.draft.remote_backup = ed.draft.remote_backup.trim().into();
-                log::info(format!("Ordnerpaar geändert: {}", ed.draft.label()));
-                self.cfg.pairs[ed.index] = ed.draft;
-                self.save();
-                self.flash("Gespeichert");
-            }
-        if let Some(i) = reset {
-            engine::reset_state(&self.cfg.pairs[i]);
-            self.flash("Sync-Status zurückgesetzt");
-        }
-    }
-
     fn delete_modal(&mut self, ctx: &egui::Context) {
         let Some(i) = self.delete_pair else { return };
         let Some(pair) = self.cfg.pairs.get(i).cloned() else {
@@ -1016,22 +931,22 @@ impl App {
         let mut go = None;
         egui::Modal::new(egui::Id::unique("draisine-delete-pair")).show(ctx, |ui| {
             ui.set_width(460.0);
-            ui.label(theme::bold(format!("„{}“ entfernen?", pair.label()), 20.0));
+            ui.label(theme::bold(format!("Remove “{}”?", pair.label()), 20.0));
             ui.add_space(4.0);
-            ui.label("Das Ordnerpaar wird nur aus Draisine entfernt. Es werden keine Dateien gelöscht, weder auf diesem Rechner noch in der Cloud.");
+            ui.label("The folder pair is only removed from Draisine. No files are deleted, neither on this computer nor in the cloud.");
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if theme::danger(ui, "Entfernen").clicked() {
+                if theme::danger(ui, "Remove").clicked() {
                     go = Some(true);
                 }
-                if theme::secondary(ui, "Abbrechen").clicked() {
+                if theme::secondary(ui, "Cancel").clicked() {
                     go = Some(false);
                 }
             });
         });
         match go {
             Some(true) => {
-                log::info(format!("Ordnerpaar entfernt: {}", pair.label()));
+                log::info(format!("Folder pair removed: {}", pair.label()));
                 engine::reset_state(&pair);
                 self.cfg.pairs.remove(i);
                 self.save();
@@ -1046,12 +961,13 @@ impl App {
 
     fn connections_page(&mut self, ui: &mut Ui) {
         let p = pal(ui);
-        theme::page_header(ui, "Verbindungen", "Cloud-Speicher, mit denen Draisine Dateien austauschen kann");
+        theme::page_header(ui, "Connections", "Cloud storage Draisine can exchange files with");
         ui.horizontal(|ui| {
-            if theme::primary(ui, "➕  Neue Verbindung").clicked() {
+            if theme::primary(ui, "➕  New connection").clicked() {
                 self.wizard = Some(Wizard::new(Step::Connection, true));
             }
-            if theme::secondary(ui, "⟳  Aktualisieren").clicked() {
+            if theme::secondary(ui, "⟳  Refresh").clicked() {
+                self.tests.clear();
                 self.load_rinfo(ui.ctx());
             }
         });
@@ -1060,20 +976,20 @@ impl App {
             None => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Lade …");
+                    ui.label("Loading …");
                 });
             }
             Some(Err(e)) => {
                 theme::callout(ui, p.red, |ui| {
-                    ui.label(theme::bold("rclone nicht gefunden", 15.0).color(p.red));
+                    ui.label(theme::bold("rclone not found", 15.0).color(p.red));
                     ui.label(e.as_str());
                 });
             }
             Some(Ok((_, remotes))) => {
                 if remotes.is_empty() {
                     theme::card(ui, |ui| {
-                        ui.label(theme::bold("Noch keine Verbindung", 16.0));
-                        ui.label(theme::muted(ui, "Lege mit „Neue Verbindung“ eine an, z. B. zu Google Drive."));
+                        ui.label(theme::bold("No connection yet", 16.0));
+                        ui.label(theme::muted(ui, "Use “New connection” to add one, e.g. to Google Drive."));
                     });
                 }
                 let remotes = remotes.clone();
@@ -1087,12 +1003,28 @@ impl App {
                                     ui.label(theme::bold(&name, 16.0));
                                     theme::badge(ui, &typ, p.blue);
                                 });
-                                ui.label(theme::muted(ui, if used == 0 { "von keinem Ordnerpaar verwendet".to_string() } else { format!("von {used} Ordnerpaar(en) verwendet") }));
+                                ui.label(theme::muted(ui, if used == 0 { "not used by any folder pair".to_string() } else { format!("used by {used} folder pair(s)") }));
                             });
                             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                if self.test_jobs.contains_key(&name) {
+                                // Test automatically once; only offer a manual retry after a failure.
+                                let start = !self.test_jobs.contains_key(&name) && !self.tests.contains_key(&name);
+                                let mut retry = false;
+                                if self.test_jobs.contains_key(&name) || start {
                                     ui.spinner();
-                                } else if theme::secondary(ui, "Verbindung testen").clicked() {
+                                    ui.label(theme::muted(ui, "checking …"));
+                                } else {
+                                    match self.tests.get(&name) {
+                                        Some(Ok(())) => {
+                                            theme::badge(ui, "✔ reachable", p.green);
+                                        }
+                                        Some(Err(e)) => {
+                                            retry = theme::secondary(ui, "⟳  Try again").clicked();
+                                            theme::badge(ui, "✖ Error", p.red).on_hover_text(e);
+                                        }
+                                        None => {}
+                                    }
+                                }
+                                if start || retry {
                                     let (cfg, n) = (self.cfg.clone(), name.clone());
                                     self.tests.remove(&name);
                                     self.test_jobs.insert(
@@ -1100,22 +1032,13 @@ impl App {
                                         Bg::spawn(ui.ctx(), move || Rclone::new(&cfg).map_err(|e| e.to_string())?.test_remote(&n).map_err(|e| e.to_string())),
                                     );
                                 }
-                                match self.tests.get(&name) {
-                                    Some(Ok(())) => {
-                                        theme::badge(ui, "✔ erreichbar", p.green);
-                                    }
-                                    Some(Err(e)) => {
-                                        theme::badge(ui, "✖ Fehler", p.red).on_hover_text(e);
-                                    }
-                                    None => {}
-                                }
                             });
                         });
                     });
                     ui.add_space(4.0);
                 }
                 ui.add_space(6.0);
-                ui.label(theme::muted(ui, "Verbindungen ändern oder löschen: im Terminal „rclone config“.").small());
+                ui.label(theme::muted(ui, "To change or delete connections, run “rclone config” in a terminal.").small());
             }
         }
     }
@@ -1128,12 +1051,12 @@ impl App {
             self.log_text = log::tail(800);
             self.log_loaded = Instant::now();
         }
-        theme::page_header(ui, "Protokoll", "Alles, was Draisine tut. Eine Textdatei pro Tag, nichts wird gelöscht.");
+        theme::page_header(ui, "Log", "Everything Draisine does. One text file per day, nothing is deleted.");
         ui.horizontal(|ui| {
-            if theme::secondary(ui, "📄  Als TXT öffnen").clicked() {
+            if theme::secondary(ui, "📄  Open as TXT").clicked() {
                 log::open_today();
             }
-            if theme::secondary(ui, "📁  Ordner öffnen").clicked() {
+            if theme::secondary(ui, "📁  Open folder").clicked() {
                 log::open_dir();
             }
         });
@@ -1162,31 +1085,31 @@ impl App {
 
     fn settings_page(&mut self, ui: &mut Ui) {
         let p = pal(ui);
-        theme::page_header(ui, "Einstellungen", "Änderungen werden sofort gespeichert");
+        theme::page_header(ui, "Settings", "Changes are saved immediately");
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             theme::card(ui, |ui| {
                 ui.horizontal(|ui| {
                     theme::toggle(ui, &mut self.cfg.auto_sync);
-                    ui.label(theme::bold("Automatisch synchronisieren", 16.0));
+                    ui.label(theme::bold("Sync automatically", 16.0));
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Alle");
+                    ui.label("Every");
                     ui.add(egui::DragValue::new(&mut self.cfg.interval_minutes).range(1..=1440));
-                    ui.label("Minuten, solange Draisine im Tray läuft.");
+                    ui.label("minutes while Draisine is running in the tray.");
                 });
-                ui.label(theme::muted(ui, "Neue Dateien und Konflikte werden automatisch übernommen. Löschen und Ersetzen wartet immer auf deine Bestätigung: das Tray-Symbol wird dann orange."));
+                ui.label(theme::muted(ui, "New files and conflicts are applied automatically. Deletes and replacements always wait for your confirmation: the tray icon then turns orange."));
             });
             ui.add_space(6.0);
             theme::card(ui, |ui| {
-                ui.label(theme::bold("Sicherheit", 16.0));
+                ui.label(theme::bold("Safety", 16.0));
                 ui.horizontal(|ui| {
-                    ui.label("Warnen, wenn mehr als");
+                    ui.label("Warn if more than");
                     ui.add(egui::DragValue::new(&mut self.cfg.max_delete_percent).range(1..=100).suffix(" %"));
-                    ui.label("der Dateien gelöscht würden");
+                    ui.label("of the files would be deleted");
                 });
                 ui.horizontal(|ui| {
                     theme::toggle(ui, &mut self.cfg.check_download);
-                    ui.label("Inhalte notfalls per Download vergleichen (genauer, aber langsam)");
+                    ui.label("Compare contents by download if needed (more accurate, but slow)");
                 });
             });
             ui.add_space(6.0);
@@ -1195,31 +1118,31 @@ impl App {
                 match &self.rinfo {
                     Some(Ok((v, _))) => ui.label(RichText::new(format!("✔  {v}")).color(p.green)),
                     Some(Err(e)) => ui.label(RichText::new(format!("✖  {e}")).color(p.red)),
-                    None => ui.label(theme::muted(ui, "prüfe …")),
+                    None => ui.label(theme::muted(ui, "checking …")),
                 };
-                egui::CollapsingHeader::new("Erweitert").default_open(false).show(ui, |ui| {
-                    field(ui, "Programm (leer = neben Draisine, sonst PATH)");
+                egui::CollapsingHeader::new("Advanced").default_open(false).show(ui, |ui| {
+                    field(ui, "Program (empty = next to Draisine, otherwise PATH)");
                     ui.add(egui::TextEdit::singleline(&mut self.cfg.rclone_path).desired_width(f32::INFINITY));
-                    field(ui, "rclone.conf (leer = neben Draisine, sonst rclone-Standard)");
+                    field(ui, "rclone.conf (empty = next to Draisine, otherwise rclone default)");
                     ui.add(egui::TextEdit::singleline(&mut self.cfg.rclone_config).desired_width(f32::INFINITY));
-                    field(ui, "Zusätzliche Flags (eins pro Zeile)");
+                    field(ui, "Extra flags (one per line)");
                     let mut s = self.cfg.extra_flags.join("\n");
                     if ui.add(egui::TextEdit::multiline(&mut s).desired_rows(2).desired_width(f32::INFINITY)).changed() {
                         self.cfg.extra_flags = s.split('\n').map(str::to_string).collect();
                     }
-                    if theme::secondary(ui, "⟳  Erneut prüfen").clicked() {
+                    if theme::secondary(ui, "⟳  Check again").clicked() {
                         self.load_rinfo(ui.ctx());
                     }
                 });
             });
             ui.add_space(6.0);
             theme::card(ui, |ui| {
-                ui.label(theme::bold("Speicherorte", 16.0));
+                ui.label(theme::bold("Storage locations", 16.0));
                 let d = dirs();
                 for (label, path) in [
-                    ("Einstellungen", d.config_file.parent().unwrap().to_path_buf()),
-                    ("Sync-Status", d.state_dir.clone()),
-                    ("Protokolle", d.log_dir.clone()),
+                    ("Settings", d.config_file.parent().unwrap().to_path_buf()),
+                    ("Sync state", d.state_dir.clone()),
+                    ("Logs", d.log_dir.clone()),
                 ] {
                     ui.horizontal(|ui| {
                         ui.label(format!("{label}:"));
@@ -1231,16 +1154,16 @@ impl App {
                 ui.label(theme::muted(
                     ui,
                     if d.portable {
-                        "Portabler Modus: alles liegt im Ordner „draisine-data“ neben dem Programm.".to_string()
+                        "Portable mode: everything is stored in the “draisine-data” folder next to the program.".to_string()
                     } else {
-                        format!("Tipp: Ein Ordner „{}“ neben dem Programm schaltet den portablen Modus ein.", crate::config::PORTABLE_DIR)
+                        format!("Tip: a folder named “{}” next to the program turns on portable mode.", crate::config::PORTABLE_DIR)
                     },
                 ).small());
             });
             ui.add_space(6.0);
             theme::card(ui, |ui| {
-                ui.label(theme::bold("Einrichtung", 16.0));
-                if theme::secondary(ui, "✨  Einrichtungsassistent erneut starten").clicked() {
+                ui.label(theme::bold("Setup", 16.0));
+                if theme::secondary(ui, "✨  Run the setup assistant again").clicked() {
                     self.wizard = Some(Wizard::new(Step::Welcome, false));
                 }
             });
@@ -1258,6 +1181,70 @@ impl App {
             }
         }
     }
+}
+
+/// Inline editor for a folder pair (shown inside its card on the overview).
+/// Returns (save clicked, cancel clicked).
+fn edit_form(ui: &mut Ui, p: &Pal, ed: &mut Edit, pair: &Pair, remotes: &[String], cfg: &Config) -> (bool, bool) {
+    let (mut save, mut cancel) = (false, false);
+    let d = &mut ed.draft;
+        ui.label(theme::bold("Edit folder pair", 17.0));
+        ui.add_space(4.0);
+        field(ui, "Name");
+        ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(f32::INFINITY));
+        field(ui, "💻  Folder on this computer");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut d.local).desired_width(ui.available_width() - 130.0));
+            if theme::secondary(ui, "📂  Choose …").clicked()
+                && let Some(f) = rfd::FileDialog::new().pick_folder() {
+                    d.local = f.display().to_string();
+                }
+        });
+        field(ui, "☁  Folder in the cloud");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut d.remote).desired_width(ui.available_width() - 150.0));
+            if theme::secondary(ui, if ed.browse { "Done" } else { "☁  Browse …" }).clicked() {
+                ed.browse = !ed.browse;
+                if ed.browse {
+                    let (r, path) = d.remote.split_once(':').unwrap_or((remotes.first().map(String::as_str).unwrap_or(""), ""));
+                    ed.browser = RemoteBrowser::new(r, path);
+                }
+            }
+        });
+        if ed.browse {
+            ed.browser.ui(ui, cfg, 180.0);
+            d.remote = ed.browser.full();
+        }
+        egui::CollapsingHeader::new("Advanced").default_open(false).show(ui, |ui| {
+            field(ui, "Backup folder in the cloud (optional)");
+            ui.add(
+                egui::TextEdit::singleline(&mut d.remote_backup)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("e.g. gdrive:_draisine-backup  (empty = provider's trash/versions)"),
+            );
+            ui.label(theme::muted(ui, "Must be on the same connection, but outside the synced folder.").small());
+            field(ui, "Exclude (one pattern per line)");
+            let mut s = d.excludes.join("\n");
+            if ui.add(egui::TextEdit::multiline(&mut s).desired_rows(3).desired_width(f32::INFINITY).hint_text("e.g. 2020/SALARY/**\n*.tmp")).changed() {
+                d.excludes = s.split('\n').map(str::to_string).collect();
+            }
+        });
+        if d.signature() != pair.signature() {
+            theme::callout(ui, p.blue, |ui| {
+                ui.label(RichText::new("ℹ  Folders or excludes changed: the next sync behaves like a first sync (nothing is deleted).").size(13.0));
+            });
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            let ok = !d.local.trim().is_empty() && d.remote.contains(':');
+            if theme::primary_enabled(ui, ok, "Save").clicked() {
+                save = true;
+            }
+            if theme::secondary(ui, "Cancel").clicked() {
+                cancel = true;
+            }
+        });
+    (save, cancel)
 }
 
 fn field(ui: &mut Ui, label: &str) {
@@ -1348,7 +1335,6 @@ impl eframe::App for App {
             .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin { left: 28, right: 28, top: 22, bottom: 12 }))
             .show(ui, |ui| match self.page {
                 Page::Overview => self.overview(ui),
-                Page::Pairs => self.pairs_page(ui),
                 Page::Connections => self.connections_page(ui),
                 Page::Log => self.log_page(ui),
                 Page::Settings => self.settings_page(ui),

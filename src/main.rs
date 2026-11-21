@@ -12,12 +12,12 @@ mod tray;
 
 use engine::Mode;
 
-const HELP: &str = "Draisine: sichere rclone-Synchronisation im Tray
+const HELP: &str = "Draisine: safe rclone sync in the tray
 
-Aufruf:
-  draisine                         Tray starten (Standard)
-  draisine --window [AKTION]       Fenster öffnen, optional mit Vorschau für AKTION
-                                   AKTION: diff | pull | push | twoway
+Usage:
+  draisine                         Start the tray (default)
+  draisine --window [ACTION]       Open the window, optionally with a preview for ACTION
+                                   ACTION: diff | pull | push | twoway
   draisine --version | --help
 ";
 

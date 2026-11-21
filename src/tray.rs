@@ -91,9 +91,9 @@ impl App {
         } else if id == *i.auto.id() {
             let mut cfg = Config::load();
             cfg.auto_sync = i.auto.is_checked();
-            log::info(format!("Auto-Sync {}", if cfg.auto_sync { "an" } else { "aus" }));
+            log::info(format!("Auto-Sync {}", if cfg.auto_sync { "on" } else { "off" }));
             if let Err(e) = cfg.save() {
-                log::error(format!("Konfiguration speichern: {e}"));
+                log::error(format!("Saving configuration: {e}"));
             }
         } else if id == *i.run_now.id() {
             let _ = self.worker.send(WorkerCmd::RunNow);
@@ -102,7 +102,7 @@ impl App {
         } else if id == *i.log_dir.id() {
             log::open_dir();
         } else if id == *i.quit.id() {
-            log::info("Draisine beendet");
+            log::info("Draisine stopped");
             let _ = self.worker.send(WorkerCmd::Quit);
             self.tray = None;
             el.exit();
@@ -125,7 +125,7 @@ impl ApplicationHandler<UserEvent> for App {
                 .build()
             {
                 Ok(t) => self.tray = Some(t),
-                Err(e) => log::error(format!("Tray-Icon konnte nicht erstellt werden: {e}")),
+                Err(e) => log::error(format!("Could not create the tray icon: {e}")),
             }
             self.refresh();
         }
@@ -163,11 +163,11 @@ fn notify(body: &str) {
 
 fn idle_status(cfg: &Config) -> (Status, String) {
     if cfg.pairs.is_empty() {
-        (Status::Off, "keine Ordnerpaare eingerichtet".into())
+        (Status::Off, "no folder pairs set up".into())
     } else if cfg.auto_sync {
-        (Status::Idle, format!("Auto-Sync an (alle {} min)", cfg.interval_minutes))
+        (Status::Idle, format!("Auto-sync on (every {} min)", cfg.interval_minutes))
     } else {
-        (Status::Off, "Auto-Sync aus".into())
+        (Status::Off, "Auto-sync off".into())
     }
 }
 
@@ -211,8 +211,8 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
         if pairs.is_empty() {
             continue;
         }
-        set(&shared, &proxy, Status::Busy, "Auto-Sync läuft …".into());
-        log::info("Auto-Sync gestartet");
+        set(&shared, &proxy, Status::Busy, "Auto-sync running …".into());
+        log::info("Auto-sync started");
         let (mut pending, mut conflicts, mut done, mut errors) = (0, 0, 0, Vec::new());
         for p in &pairs {
             match engine::auto_sync(&cfg, p) {
@@ -230,23 +230,23 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
         }
         let now = chrono::Local::now().format("%H:%M");
         let (status, text, note) = if !errors.is_empty() {
-            (Status::Error, format!("Fehler beim Auto-Sync ({now}), siehe Log"), format!("Fehler beim Sync:\n{}", errors[0]))
+            (Status::Error, format!("Auto-sync error ({now}), see log"), format!("Sync error:\n{}", errors[0]))
         } else if pending > 0 {
             (
                 Status::Attention,
-                format!("{pending} Änderungen warten auf Bestätigung ({now})"),
-                format!("{pending} Dateien sollen gelöscht oder überschrieben werden. Bitte im Menü „2-Wege-Sync …“ bestätigen."),
+                format!("{pending} changes waiting for confirmation ({now})"),
+                format!("{pending} files are to be deleted or overwritten. Please confirm via “Two-way sync …” in the menu."),
             )
         } else {
             let (_, t) = idle_status(&cfg);
-            (Status::Idle, format!("{t}, zuletzt {now}: {done} Aktionen"), String::new())
+            (Status::Idle, format!("{t}, last run {now}: {done} actions"), String::new())
         };
         let note = if conflicts > 0 {
-            format!("{conflicts} Konflikt(e): beide Versionen wurden als Konfliktdateien behalten.\n{note}")
+            format!("{conflicts} conflict(s): both versions were kept as conflict files.\n{note}")
         } else {
             note
         };
-        log::info(format!("Auto-Sync fertig: {done} Aktionen, {conflicts} Konflikte, {pending} warten, {} Fehler", errors.len()));
+        log::info(format!("Auto-sync done: {done} actions, {conflicts} conflicts, {pending} waiting, {} errors", errors.len()));
         if !note.is_empty() && note != last_note {
             notify(&note);
         }
@@ -261,7 +261,7 @@ pub fn run() -> Result<()> {
         ipc::request_window(None);
         return Ok(());
     };
-    log::info(format!("Draisine {} gestartet (Daten: {})", env!("CARGO_PKG_VERSION"), crate::config::dirs().state_dir.display()));
+    log::info(format!("Draisine {} started (data: {})", env!("CARGO_PKG_VERSION"), crate::config::dirs().state_dir.display()));
 
     #[allow(unused_mut)]
     let mut builder = EventLoop::<UserEvent>::with_user_event();
@@ -288,16 +288,16 @@ pub fn run() -> Result<()> {
 
     let items = Items {
         status: MenuItem::new("", false, None),
-        open: MenuItem::new("Draisine öffnen", true, None),
-        diff: MenuItem::new("Diff lokal ↔ remote …", true, None),
-        pull: MenuItem::new("1-Weg-Sync remote ➡ lokal …", true, None),
-        push: MenuItem::new("1-Weg-Sync lokal ➡ remote …", true, None),
-        twoway: MenuItem::new("2-Wege-Sync lokal ↔ remote …", true, None),
+        open: MenuItem::new("Open Draisine", true, None),
+        diff: MenuItem::new("Diff local ↔ remote …", true, None),
+        pull: MenuItem::new("One-way sync remote ➡ local …", true, None),
+        push: MenuItem::new("One-way sync local ➡ remote …", true, None),
+        twoway: MenuItem::new("Two-way sync local ↔ remote …", true, None),
         auto: CheckMenuItem::new("Auto-Sync", true, cfg.auto_sync, None),
-        run_now: MenuItem::new("Auto-Sync jetzt ausführen", true, None),
-        logs: MenuItem::new("Log öffnen (TXT)", true, None),
-        log_dir: MenuItem::new("Log-Ordner öffnen", true, None),
-        quit: MenuItem::new("Beenden", true, None),
+        run_now: MenuItem::new("Run auto-sync now", true, None),
+        logs: MenuItem::new("Open log (TXT)", true, None),
+        log_dir: MenuItem::new("Open log folder", true, None),
+        quit: MenuItem::new("Quit", true, None),
     };
     let menu = Menu::new();
     let sep = PredefinedMenuItem::separator;
