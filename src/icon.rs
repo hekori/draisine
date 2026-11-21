@@ -1,5 +1,6 @@
-//! The draisine icon (two wheels, beam, handlebar), drawn at runtime so no image files are needed.
-//! The colour shows the status in the tray.
+//! The Draisine icon: a rounded badge in the status colour with the logo in white on top.
+//! The logo is an embedded 256x256 alpha mask (`assets/logo_mask.png`, raw bytes in
+//! `logo_mask.bin`), scaled to the requested size at runtime. The colour shows the status in the tray.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -13,56 +14,130 @@ pub enum Status {
 impl Status {
     pub fn color(self) -> [u8; 3] {
         match self {
-            Status::Off => [128, 128, 128],
-            Status::Idle => [46, 160, 67],
-            Status::Busy => [30, 120, 220],
-            Status::Attention => [235, 140, 0],
-            Status::Error => [215, 45, 45],
+            Status::Off => [120, 126, 136],
+            Status::Idle => [34, 154, 94],
+            Status::Busy => [37, 110, 230],
+            Status::Attention => [236, 136, 18],
+            Status::Error => [214, 50, 60],
         }
     }
 }
 
-fn seg_dist(px: f32, py: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let t = (((px - a.0) * dx + (py - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
-    let (cx, cy) = (a.0 + t * dx, a.1 + t * dy);
-    ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()
+/// Signed distance to a rounded square centred at (0.5, 0.5).
+fn rounded_square(px: f32, py: f32, half: f32, radius: f32) -> f32 {
+    let qx = (px - 0.5).abs() - (half - radius);
+    let qy = (py - 0.5).abs() - (half - radius);
+    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+    outside + qx.max(qy).min(0.0) - radius
 }
 
-/// RGBA pixels, `size` x `size`.
+/// 256x256 alpha mask of the logo, row-major (see `assets/logo_mask.png`).
+const MASK: &[u8; 256 * 256] = include_bytes!("../assets/logo_mask.bin");
+const M: usize = 256;
+
+/// Summed-area table of the mask, (M+1) x (M+1), for box-filtered sampling at any size.
+fn mask_sat() -> Vec<f32> {
+    let mut t = vec![0f32; (M + 1) * (M + 1)];
+    for y in 0..M {
+        let mut row = 0f32;
+        for x in 0..M {
+            row += MASK[y * M + x] as f32 / 255.0;
+            t[(y + 1) * (M + 1) + x + 1] = t[y * (M + 1) + x + 1] + row;
+        }
+    }
+    t
+}
+
+/// Bilinear lookup in the summed-area table at fractional mask coordinates.
+fn sat_at(t: &[f32], x: f32, y: f32) -> f32 {
+    let (x, y) = (x.clamp(0.0, M as f32), y.clamp(0.0, M as f32));
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(M), (y0 + 1).min(M));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let g = |xx: usize, yy: usize| t[yy * (M + 1) + xx];
+    let top = g(x0, y0) + (g(x1, y0) - g(x0, y0)) * fx;
+    let bot = g(x0, y1) + (g(x1, y1) - g(x0, y1)) * fx;
+    top + (bot - top) * fy
+}
+
+/// Average logo coverage over the mask rectangle (x0, y0)-(x1, y1).
+fn coverage(t: &[f32], x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
+    let area = (x1 - x0) * (y1 - y0);
+    if area <= 0.0 {
+        return 0.0;
+    }
+    let sum = sat_at(t, x1, y1) - sat_at(t, x0, y1) - sat_at(t, x1, y0) + sat_at(t, x0, y0);
+    (sum / area).clamp(0.0, 1.0)
+}
+
+fn shade(c: [u8; 3], t: f32) -> [f32; 3] {
+    // t > 0 lightens towards white, t < 0 darkens towards black.
+    c.map(|v| {
+        let v = v as f32;
+        if t >= 0.0 { v + (255.0 - v) * t } else { v * (1.0 + t) }
+    })
+}
+
+/// RGBA pixels (not premultiplied), `size` x `size`.
 pub fn rgba(size: u32, color: [u8; 3]) -> Vec<u8> {
     let s = size as f32;
-    let aa = 1.2 / s; // anti-aliasing width in unit coordinates
+    let aa = 1.0 / s; // one pixel, in unit coordinates
+    let top = shade(color, 0.16);
+    let bottom = shade(color, -0.14);
+    // Small icons use almost the full square, large ones keep a margin like app icons do.
+    let half = if size <= 32 { 0.49 } else { 0.46 };
+    // The logo fills most of the badge; small sizes get a bit more so details stay visible.
+    let logo = 2.0 * half * if size <= 32 { 0.86 } else { 0.80 };
+    let l0 = 0.5 - logo / 2.0;
+    let k = M as f32 / (logo * s); // mask pixels per icon pixel
+    let sat = mask_sat();
     let mut px = vec![0u8; (size * size * 4) as usize];
-    let wheels = [(0.24f32, 0.70f32), (0.76f32, 0.70f32)];
-    let (r_out, ring) = (0.22f32, 0.075f32);
-    let segs = [
-        ((0.12, 0.44), (0.80, 0.44)), // beam
-        ((0.24, 0.70), (0.30, 0.44)), // rear stay
-        ((0.76, 0.70), (0.72, 0.44)), // fork
-        ((0.72, 0.44), (0.68, 0.18)), // stem
-        ((0.58, 0.18), (0.80, 0.18)), // handlebar
-        ((0.34, 0.36), (0.50, 0.36)), // seat
-    ];
     for y in 0..size {
         for x in 0..size {
             let (fx, fy) = ((x as f32 + 0.5) / s, (y as f32 + 0.5) / s);
-            let mut d = f32::MAX; // signed-ish distance to the shape (<= 0 inside)
-            for (cx, cy) in wheels {
-                let r = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
-                d = d.min((r - (r_out - ring / 2.0)).abs() - ring / 2.0); // ring
-                d = d.min(r - 0.05); // hub
+            let bg_a = (0.5 - rounded_square(fx, fy, half, half * 0.44) / aa).clamp(0.0, 1.0);
+            if bg_a <= 0.0 {
+                continue;
             }
-            for (a, b) in segs {
-                d = d.min(seg_dist(fx, fy, a, b) - 0.042);
-            }
-            let alpha = (0.5 - d / aa).clamp(0.0, 1.0);
+            let (mx, my) = ((x as f32 - l0 * s) * k, (y as f32 - l0 * s) * k);
+            let g_a = coverage(&sat, mx, my, mx + k, my + k);
+            let t = fy.clamp(0.0, 1.0);
             let i = ((y * size + x) * 4) as usize;
-            px[i] = color[0];
-            px[i + 1] = color[1];
-            px[i + 2] = color[2];
-            px[i + 3] = (alpha * 255.0) as u8;
+            for k in 0..3 {
+                let bg = top[k] + (bottom[k] - top[k]) * t;
+                px[i + k] = (bg + (255.0 - bg) * g_a).round() as u8;
+            }
+            px[i + 3] = (bg_a * 255.0).round() as u8;
         }
     }
     px
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corners_transparent_centre_opaque() {
+        let px = rgba(64, Status::Idle.color());
+        assert_eq!(px[3], 0); // top-left corner
+        let c = ((32 * 64 + 32) * 4) as usize;
+        assert_eq!(px[c + 3], 255);
+    }
+
+    /// Writes preview images: `DRAISINE_ICON_PREVIEW=/some/dir cargo test icon_preview -- --ignored`
+    #[test]
+    #[ignore]
+    fn icon_preview() {
+        let Ok(dir) = std::env::var("DRAISINE_ICON_PREVIEW") else {
+            eprintln!("DRAISINE_ICON_PREVIEW not set, skipping");
+            return;
+        };
+        for st in [Status::Off, Status::Idle, Status::Busy, Status::Attention, Status::Error] {
+            for size in [16u32, 22, 32, 64, 256] {
+                let path = format!("{dir}/{st:?}-{size}.rgba");
+                std::fs::write(path, rgba(size, st.color())).unwrap();
+            }
+        }
+    }
 }
