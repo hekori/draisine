@@ -184,6 +184,24 @@ impl Rclone {
         if typ == "drive" {
             args.push("scope=drive".into());
         }
+        // Own Dropbox app (consent screen shows "Draisine" instead of "rclone").
+        // Baked in at build time; without them rclone's built-in client is used.
+        if typ == "dropbox" {
+            let key = option_env!("DRAISINE_DROPBOX_APP_KEY").filter(|s| !s.is_empty());
+            let secret = option_env!("DRAISINE_DROPBOX_APP_SECRET").filter(|s| !s.is_empty());
+            if let (Some(id), Some(secret)) = (key, secret) {
+                args.push(format!("client_id={id}"));
+                args.push(format!("client_secret={secret}"));
+            }
+        }
+        // Branded page shown in the browser after the OAuth redirect (instead of rclone's
+        // "All done. Please go back to rclone."). rclone reads it only during auth and
+        // does not store `config_template_file` in rclone.conf.
+        let page = dirs().runtime_dir.join("auth_page.html");
+        match std::fs::write(&page, AUTH_PAGE) {
+            Ok(()) => args.push(format!("config_template_file={}", page.display())),
+            Err(e) => log::info(format!("Anmeldeseite nicht geschrieben ({e}), nutze rclone-Standard")),
+        }
         log::info(format!("rclone config create {name} {typ}"));
         Ok(self.command(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?)
     }
@@ -244,6 +262,9 @@ impl Rclone {
         Ok(text.lines().filter_map(|l| l.strip_prefix("= ")).map(str::to_string).collect())
     }
 }
+
+/// Go template rclone renders after the OAuth redirect (fields: .OK, .Name, .Description, .Code, .HelpURL).
+const AUTH_PAGE: &str = include_str!("../assets/auth_page.html");
 
 pub fn tmp_file(prefix: &str, content: &str) -> Result<PathBuf> {
     let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();

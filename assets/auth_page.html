@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ if .OK }}Draisine – Verbunden{{ else }}Draisine – Anmeldung fehlgeschlagen{{ end }}</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --surface: #ffffff; --border: #dfe2e8; --text: #1c2027; --muted: #6b7280;
+    --ok: #1f8a5b; --ok-soft: #dcf1e6; --err: #c82a2a; --err-soft: #f8dede;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --surface: #21242b; --border: #323741; --text: #e8eaee; --muted: #9aa1ad;
+      --ok: #4cc28a; --ok-soft: #1f3a2e; --err: #f07a7a; --err-soft: #3d2224;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 440px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 36px 32px 28px; text-align: center;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, .06);
+  }
+  .icon {
+    width: 64px; height: 64px; margin: 0 auto 20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .icon.ok { background: var(--ok-soft); color: var(--ok); }
+  .icon.err { background: var(--err-soft); color: var(--err); }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  .hint { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 14px; }
+  .details {
+    text-align: left; font-size: 13px; background: var(--bg); border-radius: 8px;
+    padding: 12px 14px; margin: 16px 0 0; color: var(--text); word-break: break-word;
+  }
+  .details div + div { margin-top: 4px; }
+  a { color: inherit; }
+  .brand { margin-top: 20px; font-size: 13px; color: var(--muted); letter-spacing: .02em; }
+</style>
+</head>
+<body>
+<main class="card">
+{{ if .OK }}
+  <div class="icon ok" aria-hidden="true">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+  </div>
+  <h1>Verbindung hergestellt</h1>
+  <p>Draisine hat jetzt Zugriff auf dein Konto.</p>
+  <p class="hint">Du kannst dieses Fenster jetzt schließen und zu Draisine zurückkehren.</p>
+{{ else }}
+  <div class="icon err" aria-hidden="true">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>
+  </div>
+  <h1>Anmeldung fehlgeschlagen</h1>
+  <p>Draisine konnte nicht mit deinem Konto verbunden werden.</p>
+  <div class="details">
+    <div><strong>Fehler:</strong> {{ .Name }}</div>
+    {{ if .Description }}<div><strong>Beschreibung:</strong> {{ .Description }}</div>{{ end }}
+    {{ if .Code }}<div><strong>Code:</strong> {{ .Code }}</div>{{ end }}
+    {{ if .HelpURL }}<div><strong>Hilfe:</strong> <a href="{{ .HelpURL }}">{{ .HelpURL }}</a></div>{{ end }}
+  </div>
+  <p class="hint">Schließe dieses Fenster und versuche es in Draisine erneut.</p>
+{{ end }}
+  <div class="brand">Draisine</div>
+</main>
+</body>
+</html>
