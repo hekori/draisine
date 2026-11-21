@@ -8,6 +8,11 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set to true to stop the running rclone call (the process is killed) and all later ones.
+pub type Cancel = Arc<AtomicBool>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
@@ -22,6 +27,7 @@ pub type Listing = HashMap<String, Entry>;
 pub struct Rclone {
     pub bin: PathBuf,
     global: Vec<String>,
+    cancel: Option<Cancel>,
 }
 
 #[derive(Deserialize)]
@@ -92,7 +98,18 @@ impl Rclone {
             global.push(c.display().to_string());
         }
         global.extend(cfg.extra_flags.iter().filter(|f| !f.trim().is_empty()).cloned());
-        Ok(Rclone { bin, global })
+        Ok(Rclone { bin, global, cancel: None })
+    }
+
+    /// Makes [`Rclone::run`] calls abortable: once `c` is set, the running rclone process is
+    /// killed and every call fails with "Abgebrochen".
+    pub fn with_cancel(mut self, c: Cancel) -> Rclone {
+        self.cancel = Some(c);
+        self
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
     }
 
     fn command(&self, args: &[String]) -> Command {
@@ -104,10 +121,49 @@ impl Rclone {
 
     /// Runs rclone, returns (success, stdout, stderr). stderr lines are logged.
     pub fn run(&self, args: &[String]) -> Result<(bool, String, String)> {
-        let out = self.command(args).output().with_context(|| format!("{} starten", self.bin.display()))?;
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        Ok((out.status.success(), stdout, stderr))
+        if self.cancel.is_none() {
+            let out = self.command(args).output().with_context(|| format!("{} starten", self.bin.display()))?;
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            return Ok((out.status.success(), stdout, stderr));
+        }
+        if self.cancelled() {
+            bail!("Abgebrochen");
+        }
+        let mut child = self
+            .command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("{} starten", self.bin.display()))?;
+        // Drain both pipes on threads so rclone never blocks on a full pipe while we poll.
+        let drain = |r: Option<Box<dyn std::io::Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = r {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                String::from_utf8_lossy(&buf).to_string()
+            })
+        };
+        let out_t = drain(child.stdout.take().map(|r| Box::new(r) as _));
+        let err_t = drain(child.stderr.take().map(|r| Box::new(r) as _));
+        let status = loop {
+            if let Some(s) = child.try_wait()? {
+                break s;
+            }
+            if self.cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = (out_t.join(), err_t.join());
+                log::info("rclone abgebrochen");
+                bail!("Abgebrochen");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        let stdout = out_t.join().unwrap_or_default();
+        let stderr = err_t.join().unwrap_or_default();
+        Ok((status.success(), stdout, stderr))
     }
 
     /// Runs rclone and streams stderr lines (progress, transfers) to the log and to `on_line`.
@@ -252,10 +308,11 @@ impl Rclone {
         if download {
             args.push("--download".into());
         }
-        let (_ok, _out, err) = self.run(&args)?; // exit code != 0 when differences exist
+        let res = self.run(&args); // exit code != 0 when differences exist
         let text = std::fs::read_to_string(&combined).unwrap_or_default();
         let _ = std::fs::remove_file(&list);
         let _ = std::fs::remove_file(&combined);
+        let (_ok, _out, err) = res?;
         if text.trim().is_empty() && !err.trim().is_empty() {
             bail!("rclone check fehlgeschlagen:\n{}", err.trim());
         }
@@ -271,4 +328,29 @@ pub fn tmp_file(prefix: &str, content: &str) -> Result<PathBuf> {
     let p = dirs().runtime_dir.join(format!("{prefix}-{}-{n}.txt", std::process::id()));
     std::fs::write(&p, content)?;
     Ok(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs rclone. Run with: cargo test -- --ignored --test-threads=1
+    #[test]
+    #[ignore]
+    fn cancel_kills_running_rclone() {
+        let cancel: Cancel = Default::default();
+        let rc = Rclone::new(&Config::default()).unwrap().with_cancel(cancel.clone());
+        let c = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            c.store(true, Ordering::Relaxed);
+        });
+        let t = std::time::Instant::now();
+        // Recursive listing of / runs far longer than the test allows.
+        let r = rc.run(&["lsjson".into(), "-R".into(), "/".into()]);
+        assert!(r.is_err_and(|e| e.to_string() == "Abgebrochen"));
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "took {:?}", t.elapsed());
+        // Later calls fail immediately without starting rclone.
+        assert!(rc.run(&["version".into()]).is_err());
+    }
 }

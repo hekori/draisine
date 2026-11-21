@@ -12,7 +12,7 @@
 
 use crate::config::{Config, Pair, dirs};
 use crate::log;
-use crate::rclone::{Entry, Listing, Rclone, join};
+use crate::rclone::{Cancel, Entry, Listing, Rclone, join};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -288,10 +288,18 @@ fn change(cur: Option<&Entry>, prev: Option<Entry>) -> Ch {
 // ---------------------------------------------------------------- planning
 
 pub fn plan(cfg: &Config, pair: &Pair, mode: Mode) -> Result<Plan> {
+    plan_with(cfg, pair, mode, None)
+}
+
+/// Like [`plan`], but stops (killing the running rclone) as soon as `cancel` is set.
+pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) -> Result<Plan> {
     if pair.local.trim().is_empty() || pair.remote.trim().is_empty() {
         bail!("[{}] lokaler Ordner und Remote müssen gesetzt sein", pair.label());
     }
-    let rc = Rclone::new(cfg)?;
+    let mut rc = Rclone::new(cfg)?;
+    if let Some(c) = cancel {
+        rc = rc.with_cancel(c);
+    }
     let s = list_sides(&rc, pair)?;
     let st = load_state(pair);
     let mut warnings = Vec::new();

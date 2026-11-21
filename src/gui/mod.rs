@@ -6,7 +6,7 @@ mod wizard;
 
 use crate::config::{APP_NAME, Config, Pair, dirs};
 use crate::engine::{self, Action, Mode, Plan, Report};
-use crate::rclone::{Entry, Rclone};
+use crate::rclone::{Cancel, Entry, Rclone};
 use crate::{icon, ipc, log};
 use browser::RemoteBrowser;
 use eframe::egui::{self, Color32, CursorIcon, Layout, Margin, RichText, Sense, Ui, vec2};
@@ -77,6 +77,8 @@ struct App {
     job: Job,
     wizard: Option<Wizard>,
     plans_job: Option<Bg<(Mode, Plans)>>,
+    /// Set by „Abbrechen“ while planning: kills the running rclone and drops the result.
+    plan_cancel: Option<Cancel>,
     exec_job: Option<Bg<Results>>,
     progress: Arc<Mutex<Vec<String>>>,
     confirm: bool,
@@ -181,6 +183,7 @@ impl App {
             page: Page::Overview,
             job: Job::None,
             plans_job: None,
+            plan_cancel: None,
             exec_job: None,
             progress: Arc::new(Mutex::new(Vec::new())),
             confirm: false,
@@ -271,11 +274,13 @@ impl App {
         self.job = Job::Planning(mode);
         log::info(format!("Vorschau: {}", mode.label()));
         let cfg = self.cfg.clone();
+        let cancel: Cancel = Default::default();
+        self.plan_cancel = Some(cancel.clone());
         self.plans_job = Some(Bg::spawn(ctx, move || {
             let plans = pairs
                 .iter()
                 .map(|p| {
-                    engine::plan(&cfg, p, mode).map_err(|e| {
+                    engine::plan_with(&cfg, p, mode, Some(cancel.clone())).map_err(|e| {
                         log::error(format!("[{}] Vorschau fehlgeschlagen: {e:#}", p.label()));
                         format!("{e:#}")
                     })
@@ -283,6 +288,18 @@ impl App {
                 .collect();
             (mode, plans)
         }));
+    }
+
+    /// Stops a running comparison: kills rclone, discards the result, back to the overview.
+    fn cancel_plan(&mut self) {
+        if let Some(c) = self.plan_cancel.take() {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        // The worker thread finishes on its own within ~100 ms; its result is ignored.
+        self.plans_job = None;
+        self.job = Job::None;
+        log::info("Vergleich abgebrochen");
+        self.flash("Vergleich abgebrochen");
     }
 
     fn start_execute(&mut self, ctx: &egui::Context) {
@@ -321,6 +338,7 @@ impl App {
         if let Some(j) = &mut self.plans_job
             && let Some((m, plans)) = j.poll() {
                 self.plans_job = None;
+                self.plan_cancel = None;
                 #[cfg(debug_assertions)]
                 if std::env::var("DRAISINE_DEBUG_CONFIRM").is_ok() {
                     self.confirm = true;
@@ -435,6 +453,10 @@ impl App {
                         ui.label(theme::bold("Vergleiche diesen Rechner mit der Cloud …", 15.0));
                     });
                     ui.label(theme::muted(ui, "Bei vielen Dateien kann das einen Moment dauern. Es wird noch nichts verändert."));
+                    ui.add_space(8.0);
+                    if theme::secondary(ui, "Abbrechen").on_hover_text("Vergleich stoppen. Es wurde nichts verändert.").clicked() {
+                        self.cancel_plan();
+                    }
                 });
                 return;
             }
