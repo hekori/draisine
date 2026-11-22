@@ -858,8 +858,11 @@ impl App {
                 };
                 theme::card(ui, |ui| {
                     ui.label(theme::bold(plan.pair.label(), 17.0));
-                    theme::path_line(ui, "💻", &format!("{}   ·  {} files", plan.pair.local, plan.local_files));
-                    theme::path_line(ui, "☁", &format!("{}   ·  {} files", plan.pair.remote, plan.remote_files));
+                    // The Changes table shows both folders in its column header; otherwise show
+                    // them here, this computer left and the cloud right.
+                    if plan.items.is_empty() || view != preview::View::Changes {
+                        preview::sides(ui, &p, plan, false);
+                    }
                     for w in &plan.warnings {
                         theme::callout(ui, p.orange, |ui| {
                             ui.label(RichText::new(format!("⚠  {w}")).color(p.orange));

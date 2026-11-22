@@ -366,15 +366,19 @@ pub fn steps(ui: &mut Ui, labels: &[&str], current: usize) {
 
 /// One-line path with icon, home dir shown as ~, truncated with "…"; full path on hover.
 pub fn path_line(ui: &mut Ui, icon: &str, path: &str) -> Response {
-    let mut short = path.to_string();
+    ui.add(egui::Label::new(RichText::new(format!("{icon}  {}", short_path(path))).color(pal(ui).muted)).truncate())
+        .on_hover_text(path)
+}
+
+/// `path` with the home directory shortened to `~`.
+pub fn short_path(path: &str) -> String {
     if let Some(h) = directories::UserDirs::new() {
         let home = h.home_dir().display().to_string();
         if let Some(rest) = path.strip_prefix(&home) {
-            short = format!("~{rest}");
+            return format!("~{rest}");
         }
     }
-    ui.add(egui::Label::new(RichText::new(format!("{icon}  {short}")).color(pal(ui).muted)).truncate())
-        .on_hover_text(path)
+    path.to_string()
 }
 
 // ------------------------------------------------------------------ provider logos
