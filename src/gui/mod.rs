@@ -761,7 +761,6 @@ impl App {
     // ------------------------------------------------------------------ review
 
     fn action_bar(&mut self, ui: &mut Ui) {
-        let p = pal(ui);
         let ctx = ui.ctx().clone();
         let Job::Review(mode, plans) = &self.job else { return };
         let mode = *mode;
@@ -776,9 +775,6 @@ impl App {
                 ui.label(theme::muted(ui, format!("{total} differences · nothing has been changed")));
             } else {
                 ui.label(theme::bold(format!("{sel} of {total} changes selected"), 14.5));
-                if destr > 0 {
-                    theme::badge(ui, &format!("{destr} delete/replace"), p.red);
-                }
             }
             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                 if mode == Mode::Diff {
