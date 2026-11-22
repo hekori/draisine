@@ -47,6 +47,7 @@ enum Page {
     Connections,
     Log,
     Settings,
+    About,
 }
 
 type Plans = Vec<Result<Plan, String>>;
@@ -214,6 +215,7 @@ impl App {
                 "conn" => Page::Connections,
                 "log" => Page::Log,
                 "settings" => Page::Settings,
+                "about" => Page::About,
                 _ => Page::Overview,
             };
         }
@@ -407,6 +409,7 @@ impl App {
             (Page::Connections, "☁", "Connections", 0),
             (Page::Log, "📄", "Log", 0),
             (Page::Settings, "⚙", "Settings", 0),
+            (Page::About, "ℹ", "About", 0),
         ] {
             if theme::nav_item(ui, icon, label, self.page == pg, badge).clicked() {
                 self.page = pg;
@@ -1183,6 +1186,56 @@ impl App {
     }
 }
 
+const REPO_URL: &str = "https://github.com/hekori/draisine";
+const LICENSE: &str = include_str!("../../LICENSE");
+const THIRD_PARTY: &str = include_str!("../../assets/THIRD_PARTY.txt");
+
+fn about_page(ui: &mut Ui) {
+    theme::page_header(ui, "About", &format!("Draisine {}", env!("CARGO_PKG_VERSION")));
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        theme::card(ui, |ui| {
+            ui.label(theme::bold("Draisine", 16.0));
+            ui.label("Safe sync of local folders with Google Drive & co. Every delete and overwrite is previewed and needs your confirmation. rclone does the transfer.");
+            ui.add_space(4.0);
+            ui.label("Draisine is open source. Source code, issues and releases are on GitHub:");
+            if theme::link(ui, REPO_URL).clicked() {
+                let _ = open::that_detached(REPO_URL);
+            }
+            ui.add_space(4.0);
+            ui.label(theme::muted(ui, "Copyright © 2026 Sebastian Walter. Released under the MIT License."));
+            egui::CollapsingHeader::new("License text").default_open(false).show(ui, |ui| {
+                ui.label(RichText::new(LICENSE).monospace().small());
+            });
+        });
+        ui.add_space(6.0);
+        theme::card(ui, |ui| {
+            ui.label(theme::bold("Open-source attribution", 16.0));
+            ui.label("Draisine is built on open-source software:");
+            for (name, license, url) in [
+                ("rclone (bundled)", "MIT", "https://rclone.org"),
+                ("egui / eframe", "MIT or Apache-2.0", "https://github.com/emilk/egui"),
+                ("Noto Sans font", "SIL Open Font License 1.1", "https://github.com/notofonts/latin-greek-cyrillic"),
+            ] {
+                ui.horizontal(|ui| {
+                    if theme::link(ui, name).clicked() {
+                        let _ = open::that_detached(url);
+                    }
+                    ui.label(theme::muted(ui, license));
+                });
+            }
+            let n = THIRD_PARTY.matches("\n  License:").count();
+            ui.label(theme::muted(ui, format!("…and {n} components in total, including all Rust crates compiled into Draisine.")).small());
+            egui::CollapsingHeader::new("All components and licenses").default_open(false).show(ui, |ui| {
+                if theme::secondary(ui, "📋  Copy to clipboard").clicked() {
+                    ui.ctx().copy_text(THIRD_PARTY.to_string());
+                }
+                ui.add_space(4.0);
+                ui.label(RichText::new(THIRD_PARTY).monospace().small());
+            });
+        });
+    });
+}
+
 /// Inline editor for a folder pair (shown inside its card on the overview).
 /// Returns (save clicked, cancel clicked).
 fn edit_form(ui: &mut Ui, p: &Pal, ed: &mut Edit, pair: &Pair, remotes: &[String], cfg: &Config) -> (bool, bool) {
@@ -1338,6 +1391,7 @@ impl eframe::App for App {
                 Page::Connections => self.connections_page(ui),
                 Page::Log => self.log_page(ui),
                 Page::Settings => self.settings_page(ui),
+                Page::About => about_page(ui),
             });
         self.confirm_modal(&ctx);
         self.delete_modal(&ctx);

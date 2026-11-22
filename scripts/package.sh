@@ -66,6 +66,8 @@ else
   chmod +x "$OUT/"* 2>/dev/null || true
 fi
 cp packaging/README.txt "$OUT/"
+cp assets/THIRD_PARTY.txt "$OUT/"
+cp LICENSE "$OUT/LICENSE.txt"
 
 echo "== archive"
 cd dist

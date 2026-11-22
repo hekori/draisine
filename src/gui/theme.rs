@@ -284,7 +284,15 @@ pub fn nav_item(ui: &mut Ui, icon: &str, label: &str, selected: bool, badge_coun
     let painter = ui.painter();
     painter.rect_filled(rect, 8.0, bg);
     let fg = if selected { p.accent } else { p.muted };
-    painter.text(rect.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, icon, FontId::proportional(16.0), fg);
+    // Icons are centered on a common axis so narrow and wide glyphs line up.
+    let ic = rect.left_center() + vec2(22.0, 0.0);
+    if icon == "ℹ" {
+        // The text font renders ℹ as a bare "i"; draw a circled i instead.
+        painter.circle_stroke(ic, 7.5, Stroke::new(1.6, fg));
+        painter.text(ic + vec2(0.0, 0.5), Align2::CENTER_CENTER, "i", FontId::new(11.5, FontFamily::Name(BOLD.into())), fg);
+    } else {
+        painter.text(ic, Align2::CENTER_CENTER, icon, FontId::proportional(16.0), fg);
+    }
     let font = if selected { FontId::new(14.5, FontFamily::Name(BOLD.into())) } else { FontId::proportional(14.5) };
     painter.text(rect.left_center() + vec2(42.0, 0.0), Align2::LEFT_CENTER, label, font, if selected { p.text } else { p.text.gamma_multiply(0.85) });
     if badge_count > 0 {

@@ -685,6 +685,7 @@ dependencies = [
  "egui",
  "notify-rust",
  "open",
+ "png",
  "rfd",
  "serde",
  "serde_json",

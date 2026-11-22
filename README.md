@@ -87,3 +87,7 @@ The window runs as a separate process. The tray starts it when needed, and an op
 | State, logs | `~/.local/share/draisine/{state,logs}` | `%APPDATA%\hekori\draisine\data\…` | `~/Library/Application Support/de.hekori.draisine/…` |
 
 **Portable mode:** if there is a `draisine-data` folder next to the program, everything is stored there. An `rclone.conf` next to the program is used automatically.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Third-party components (bundled rclone, fonts, Rust crates) and their licenses are listed in [assets/THIRD_PARTY.txt](assets/THIRD_PARTY.txt) and on the About page.

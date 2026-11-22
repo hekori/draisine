@@ -2,6 +2,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod config;
+mod desktop;
 mod engine;
 mod gui;
 mod icon;
@@ -31,6 +32,7 @@ fn main() {
         println!("draisine {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    desktop::ensure();
     let result = if args.first().map(String::as_str) == Some("--window") {
         let action = args.get(1).and_then(|a| Mode::from_arg(a));
         gui::run(action)

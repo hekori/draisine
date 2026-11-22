@@ -1,6 +1,7 @@
 //! The Draisine icon: a rounded badge in the status colour with the logo in white on top.
 //! The logo is an embedded 256x256 alpha mask (`assets/logo_mask.png`, raw bytes in
-//! `logo_mask.bin`), scaled to the requested size at runtime. The colour shows the status in the tray.
+//! `logo_mask.bin`), scaled to the requested size at runtime. Used for the window and the app logo.
+//! The tray uses a separate pixel-art glyph without a badge ([`tray_rgba`]), coloured by status.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -113,6 +114,83 @@ pub fn rgba(size: u32, color: [u8; 3]) -> Vec<u8> {
     px
 }
 
+// ---------------------------------------------------------------- tray glyph
+
+/// The tray glyph, pixel art on a 22x22 grid: a simplified logo (document with sync arrows,
+/// two pages stacked behind, wheels on an axle, rail). `#` opaque, `+` / `-` pages fading out,
+/// `o` half-covered pixels that round off the wheels.
+const GLYPH: [&str; 22] = [
+    "......................",
+    "...########...........",
+    "...#########..........",
+    "...##########..+......",
+    "...#######.###.+......",
+    "...##.......##.+.-....",
+    "...#######.###.+.-....",
+    "...###########.+.-....",
+    "...###.#######.+.-....",
+    "...##.......##.+.-....",
+    "...###.#######.+.-....",
+    "...###########.+......",
+    "...###########.+......",
+    "......................",
+    "....o###o...o###o.....",
+    "....#####...#####.....",
+    "....##.#######.##.....",
+    "....#####...#####.....",
+    "....o###o...o###o.....",
+    "......................",
+    ".####################.",
+    "......................",
+];
+
+/// Glyph coverage (0..1) at a point in grid units (0..22, y down).
+fn glyph(x: f32, y: f32) -> f32 {
+    let (cx, cy) = (x.floor() as usize, y.floor() as usize);
+    match GLYPH.get(cy).and_then(|row| row.as_bytes().get(cx)) {
+        Some(b'#') => 1.0,
+        Some(b'+') => 0.7,
+        Some(b'o') => 0.5,
+        Some(b'-') => 0.4,
+        _ => 0.0,
+    }
+}
+
+/// Tray icon: the logo glyph in `color` on a transparent background (no badge), so it sits
+/// next to other monochrome tray icons. Pixel-exact at 22 px and its multiples (44, 66, …).
+pub fn tray_rgba(size: u32, color: [u8; 3]) -> Vec<u8> {
+    const SS: u32 = 8; // samples per axis and pixel
+    let unit = 22.0 / size as f32;
+    let mut px = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let mut a = 0.0;
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let gx = (x as f32 + (sx as f32 + 0.5) / SS as f32) * unit;
+                    let gy = (y as f32 + (sy as f32 + 0.5) / SS as f32) * unit;
+                    a += glyph(gx, gy);
+                }
+            }
+            let i = ((y * size + x) * 4) as usize;
+            px[i..i + 3].copy_from_slice(&color);
+            px[i + 3] = (a / (SS * SS) as f32 * 255.0).round() as u8;
+        }
+    }
+    px
+}
+
+impl Status {
+    /// Glyph colour in the tray: white like the neighbouring icons while all is well,
+    /// the status colour when something is going on or needs attention.
+    pub fn tray_color(self) -> [u8; 3] {
+        match self {
+            Status::Off | Status::Idle => [255, 255, 255],
+            s => s.color(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +215,10 @@ mod tests {
             for size in [16u32, 22, 32, 64, 256] {
                 let path = format!("{dir}/{st:?}-{size}.rgba");
                 std::fs::write(path, rgba(size, st.color())).unwrap();
+            }
+            for size in [22u32, 44, 64] {
+                let path = format!("{dir}/tray-{st:?}-{size}.rgba");
+                std::fs::write(path, tray_rgba(size, st.tray_color())).unwrap();
             }
         }
     }

@@ -61,7 +61,8 @@ struct App {
 }
 
 fn tray_icon(status: Status) -> tray_icon::Icon {
-    tray_icon::Icon::from_rgba(icon::rgba(64, status.color()), 64, 64).expect("icon")
+    // 44 = 2 x 22: pixel-exact on HiDPI panels, and an exact halving for the usual 22 px slot.
+    tray_icon::Icon::from_rgba(icon::tray_rgba(44, status.tray_color()), 44, 44).expect("icon")
 }
 
 impl App {
