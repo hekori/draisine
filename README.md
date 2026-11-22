@@ -60,7 +60,7 @@ cargo test                          # unit tests
 cargo test -- --ignored --test-threads=1   # end-to-end with real rclone (local folder as "remote")
 # Debug builds only, for screenshots: DRAISINE_DEBUG_STEP=0..5 (assistant), DRAISINE_DEBUG_PAGE=conn|log|settings,
 # DRAISINE_DEBUG_THEME=light, DRAISINE_DEBUG_CONFIRM=1
-scripts/package.sh                  # dist/draisine-<ver>-<os>-<arch>.tar.gz|zip, including rclone
+scripts/package.sh                  # dist/draisine-<os>-<arch>.tar.gz|zip, including rclone
 ```
 
 Own Dropbox app: set `DRAISINE_DROPBOX_APP_KEY` and `DRAISINE_DROPBOX_APP_SECRET` at build time (locally in the gitignored `.cargo/config.toml` under `[env]`, in CI as repository secrets). Without them, rclone's built-in client is used.

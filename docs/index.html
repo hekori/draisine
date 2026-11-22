@@ -58,6 +58,10 @@
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   @media (prefers-color-scheme: dark) { .btn.primary { color: #0f1a14; } }
   .btn:hover { filter: brightness(1.06); }
+  .downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 0 0 28px; }
+  .downloads .btn { flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 18px; }
+  .downloads .btn small { font-weight: 400; font-size: 13px; color: var(--muted); }
+  .downloads .btn.primary small { color: inherit; opacity: .85; }
   .platforms { margin-top: 16px; font-size: 14px; color: var(--muted); }
   .hero-art { display: flex; justify-content: center; }
   .hero-art .logo { width: min(320px, 70vw); aspect-ratio: 1; color: var(--text); opacity: .92; }
@@ -136,7 +140,7 @@
       <h1>Cloud sync that <em>compares first and asks when in doubt.</em></h1>
       <p class="lead">Draisine is a small tray app that keeps local folders in sync with Google Drive, OneDrive, Dropbox and dozens of other clouds. Before anything is changed, it compares the files on your computer with those in the cloud and with the last sync, so it knows which side changed what. When that is clear, it syncs. When in doubt, it asks you.</p>
       <div class="cta">
-        <a class="btn primary" href="#download">Download</a>
+        <a class="btn primary" id="hero-download" href="#download">Download</a>
         <a class="btn" href="https://github.com/hekori/draisine">View on GitHub</a>
       </div>
       <p class="platforms">Linux · Windows · macOS — a single file, no installation. Free and open source (MIT).</p>
@@ -209,8 +213,14 @@
     <div class="wrap">
       <h2>Get started</h2>
       <p class="sub">Download the archive for your system and run it. The matching <a href="https://rclone.org">rclone</a> is included, which does the actual transfer and supports more than 70 cloud services.</p>
+      <div class="downloads">
+        <a class="btn" data-os="windows" href="https://github.com/hekori/draisine/releases/latest/download/draisine-windows-x86_64.zip">Windows<small>64-bit · .zip</small></a>
+        <a class="btn" data-os="mac" href="https://github.com/hekori/draisine/releases/latest/download/draisine-macos-aarch64.tar.gz">macOS Apple Silicon<small>M1 and newer · .tar.gz</small></a>
+        <a class="btn" data-os="mac-intel" href="https://github.com/hekori/draisine/releases/latest/download/draisine-macos-x86_64.tar.gz">macOS Intel<small>older Macs · .tar.gz</small></a>
+        <a class="btn" data-os="linux" href="https://github.com/hekori/draisine/releases/latest/download/draisine-linux-x86_64.tar.gz">Linux<small>x86_64 · .tar.gz</small></a>
+      </div>
       <ol class="steps">
-        <li><strong>Download</strong>Get the archive for Linux, Windows or macOS from the <a href="https://github.com/hekori/draisine/releases/latest">latest release</a>.</li>
+        <li><strong>Download</strong>Pick your system above. All versions and release notes are on the <a href="https://github.com/hekori/draisine/releases">releases page</a>.</li>
         <li><strong>Unpack and run</strong>No installer. Draisine appears in your system tray.</li>
         <li><strong>Connect your cloud</strong>A setup assistant opens on first start. You sign in to your cloud in the browser.</li>
         <li><strong>Choose folders</strong>Pick a local folder and a cloud folder, look at the preview, and sync.</li>
@@ -236,6 +246,19 @@ cargo build --release   # target/release/draisine</pre>
     <span><a href="https://github.com/hekori/draisine">Source</a> · <a href="https://github.com/hekori/draisine/issues">Report a problem</a> · <a href="https://github.com/hekori/draisine/releases">Releases</a></span>
   </div>
 </footer>
+
+<script>
+  // Highlight the download for the visitor's system and point the hero button straight at it.
+  (function () {
+    var ua = navigator.userAgent, os = /Windows/.test(ua) ? "windows" : /Mac/.test(ua) && !/iPhone|iPad/.test(ua) ? "mac" : /Linux/.test(ua) && !/Android/.test(ua) ? "linux" : null;
+    var btn = os && document.querySelector('.downloads [data-os="' + os + '"]');
+    if (!btn) return;
+    btn.classList.add("primary");
+    var hero = document.getElementById("hero-download");
+    hero.href = btn.href;
+    hero.textContent = "Download for " + (os === "mac" ? "macOS" : btn.firstChild.textContent);
+  })();
+</script>
 
 </body>
 </html>

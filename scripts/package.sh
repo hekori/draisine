@@ -5,7 +5,9 @@
 #   scripts/package.sh aarch64-apple-darwin # explicit Rust target
 #   RCLONE_VERSION=v1.76.0 scripts/package.sh
 #
-# Output: dist/draisine-<version>-<os>-<arch>/  and  dist/draisine-<version>-<os>-<arch>.(tar.gz|zip)
+# Output: dist/draisine-<version>-<os>-<arch>/  and  dist/draisine-<os>-<arch>.(tar.gz|zip)
+# The archive name has no version, so the landing page can link to
+# https://github.com/hekori/draisine/releases/latest/download/<archive>.
 # macOS: dist/.../Draisine.app (tray-only app, rclone inside Contents/MacOS).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -70,11 +72,13 @@ cp assets/THIRD_PARTY.txt "$OUT/"
 cp LICENSE "$OUT/LICENSE.txt"
 
 echo "== archive"
+ARCHIVE="draisine-$OS-$ARCH"
 cd dist
 if [[ $OS == windows ]]; then
-  if command -v 7z >/dev/null; then 7z a -bd "$NAME.zip" "$NAME" >/dev/null; else zip -qr "$NAME.zip" "$NAME"; fi
-  echo "dist/$NAME.zip"
+  rm -f "$ARCHIVE.zip"
+  if command -v 7z >/dev/null; then 7z a -bd "$ARCHIVE.zip" "$NAME" >/dev/null; else zip -qr "$ARCHIVE.zip" "$NAME"; fi
+  echo "dist/$ARCHIVE.zip"
 else
-  tar czf "$NAME.tar.gz" "$NAME"
-  echo "dist/$NAME.tar.gz"
+  tar czf "$ARCHIVE.tar.gz" "$NAME"
+  echo "dist/$ARCHIVE.tar.gz"
 fi
