@@ -827,9 +827,23 @@ fn fresh_has_remote(plan: &Plan, path: &str) -> bool {
         || plan.in_sync.iter().any(|p| p == path)
 }
 
+/// The pair has a recorded sync for its current folders and excludes. Auto-sync requires this:
+/// the first sync is always done by hand, so the user has seen what it does.
+pub fn has_synced(pair: &Pair) -> bool {
+    load_state(pair).last_sync.is_some()
+}
+
+/// The background auto-sync includes this pair.
+pub fn auto_sync_active(pair: &Pair) -> bool {
+    pair.auto_sync && has_synced(pair)
+}
+
 /// Unattended two-way sync: executes only non-destructive actions (new files, conflicts).
 /// Returns (report, number of deletes/overwrites waiting for confirmation).
 pub fn auto_sync(cfg: &Config, pair: &Pair) -> Result<(Report, usize)> {
+    if !has_synced(pair) {
+        bail!("[{}] Auto-sync needs one manual sync first", pair.label());
+    }
     let mut p = plan(cfg, pair, Mode::TwoWay)?;
     let mut pending = 0;
     for i in p.items.iter_mut() {
@@ -910,7 +924,9 @@ mod tests {
             ]
         );
 
-        // 2. First two-way sync: copies + conflict, nothing deleted.
+        // 2. First two-way sync: copies + conflict, nothing deleted. Auto-sync is refused before it.
+        assert!(!has_synced(&pair));
+        assert!(auto_sync(&cfg, &pair).is_err(), "auto-sync needs one manual sync first");
         let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();
         assert_eq!(
             acts(&p),
@@ -934,6 +950,7 @@ mod tests {
             }
         }
         assert!(plan(&cfg, &pair, Mode::TwoWay).unwrap().items.is_empty(), "in sync after first run");
+        assert!(has_synced(&pair));
 
         // 3. Local edit + remote delete: both need confirmation; auto-sync must not do them.
         std::thread::sleep(std::time::Duration::from_millis(1100));

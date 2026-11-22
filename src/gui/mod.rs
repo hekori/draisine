@@ -297,7 +297,7 @@ impl App {
             .iter()
             .filter(|p| match &ids {
                 Some(ids) => ids.contains(&p.id),
-                None => p.enabled,
+                None => true,
             })
             .cloned()
             .collect();
@@ -333,6 +333,17 @@ impl App {
                 })
                 .collect();
             if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                // First two-way sync of a pair that is already identical: nothing to apply, but the
+                // state must still be recorded, otherwise it counts as never synced (no auto-sync).
+                for p in plans.iter().flatten() {
+                    if mode == Mode::TwoWay
+                        && p.count(|i| i.action.executable()) == 0
+                        && !engine::has_synced(&p.pair)
+                        && let Err(e) = engine::execute(&cfg, p, &mut |_| {})
+                    {
+                        log::error(format!("[{}] Recording the sync state failed: {e:#}", p.pair.label()));
+                    }
+                }
                 let note = if plans.iter().any(|p| p.is_err()) {
                     ipc::TrayNote::Changed // let the tray sort the error (offline, sign-in, …)
                 } else if plans.iter().flatten().all(|p| p.count(|i| i.action.executable()) == 0) {
@@ -457,12 +468,6 @@ impl App {
         }
         if self.last_poll.elapsed() > Duration::from_millis(500) {
             self.last_poll = Instant::now();
-            // Auto-sync may be toggled from the tray.
-            let disk = Config::load();
-            if disk.auto_sync != self.saved.auto_sync {
-                self.saved.auto_sync = disk.auto_sync;
-                self.cfg.auto_sync = disk.auto_sync;
-            }
         }
         ctx.request_repaint_after(Duration::from_millis(if self.busy() { 200 } else { 500 }));
     }
@@ -470,7 +475,6 @@ impl App {
     // ------------------------------------------------------------------ sidebar
 
     fn sidebar(&mut self, ui: &mut Ui) {
-        let p = pal(ui);
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(6.0);
@@ -494,27 +498,8 @@ impl App {
                 self.edit = None;
             }
         }
-        // Auto-sync box + version, pinned to the bottom of the sidebar.
-        ui.add_space((ui.available_height() - 118.0).max(12.0));
-        egui::Frame::new().fill(p.surface).stroke(egui::Stroke::new(1.0, p.border)).corner_radius(10).inner_margin(12).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let mut on = self.cfg.auto_sync;
-                if theme::toggle(ui, &mut on).changed() {
-                    self.cfg.auto_sync = on;
-                    log::info(format!("Auto-Sync {}", if on { "on" } else { "off" }));
-                    self.save();
-                }
-                ui.label(theme::bold("Auto-Sync", 14.0));
-            });
-            let t = if self.cfg.auto_sync {
-                format!("every {} min in the background", self.cfg.interval_minutes)
-            } else {
-                "off: manual only".into()
-            };
-            ui.label(theme::muted(ui, t).small());
-        });
-        ui.add_space(6.0);
+        // Version, pinned to the bottom of the sidebar.
+        ui.add_space((ui.available_height() - 24.0).max(12.0));
         ui.label(theme::muted(ui, format!("Version {}", env!("CARGO_PKG_VERSION"))).small());
     }
 
@@ -584,7 +569,7 @@ impl App {
         }
         let ctx = ui.ctx().clone();
         let busy = self.busy();
-        let any_enabled = self.cfg.pairs.iter().any(|p| p.enabled) && !busy;
+        let any_enabled = !busy;
         let syncing = self.syncing.clone();
         let in_sync_alpha = match &self.in_sync {
             Some((_, t)) if t.elapsed() < IN_SYNC_NOTE => {
@@ -631,9 +616,6 @@ impl App {
                     }
                     ui.horizontal(|ui| {
                         ui.label(theme::bold(pair.label(), 17.0));
-                        if !pair.enabled {
-                            theme::badge(ui, "paused", p.muted);
-                        }
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                             let id = pair.id.clone();
                             ui.menu_button(RichText::new("•••").size(13.0), |ui| {
@@ -668,13 +650,6 @@ impl App {
                             })
                             .response
                             .on_hover_text("Compare, one-way sync, edit, remove, …");
-                            ui.add_space(4.0);
-                            if theme::toggle(ui, &mut pair.enabled)
-                                .on_hover_text("Active: included in “Sync all”, “Compare all” and auto-sync")
-                                .changed()
-                            {
-                                toggled = true;
-                            }
                         });
                     });
                     theme::path_line(ui, "💻", &pair.local);
@@ -686,6 +661,7 @@ impl App {
                         ui.label(theme::muted(ui, format!("Backup: {}", pair.remote_backup)).small());
                     }
                     let (t, r) = engine::last_status(pair);
+                    let synced = t.is_some();
                     match t {
                         Some(t) => ui.label(RichText::new(format!("🕓  Last synced {t}  ·  {r}")).size(13.0)),
                         None => ui.label(RichText::new("🕓  Never synced").size(13.0).color(p.orange)),
@@ -709,6 +685,29 @@ impl App {
                                 .clicked()
                             {
                                 action = Some((Mode::TwoWay, pair.id.clone()));
+                            }
+                            // Auto-sync is offered only once the pair has been synced by hand.
+                            if synced {
+                                ui.add_space(16.0);
+                                let hint = "Two-way sync in the background. Deletes and overwrites always wait for you.";
+                                let r = ui.add_enabled_ui(!busy, |ui| theme::toggle(ui, &mut pair.auto_sync)).inner;
+                                if r.on_hover_text(hint).changed() {
+                                    log::info(format!("[{}] Auto-sync {}", pair.label(), if pair.auto_sync { "on" } else { "off" }));
+                                    toggled = true;
+                                }
+                                ui.label(RichText::new("Auto-sync").size(13.5)).on_hover_text(hint);
+                                if pair.auto_sync {
+                                    ui.label(theme::muted(ui, "every"));
+                                    let r = ui.add(egui::DragValue::new(&mut pair.interval_minutes).range(1..=1440).speed(0.2));
+                                    if r.changed() {
+                                        toggled = true;
+                                    }
+                                    ui.label(theme::muted(ui, "min"));
+                                    if cfg_snapshot.auto_sync_paused {
+                                        theme::badge(ui, "paused", p.muted)
+                                            .on_hover_text("Auto-sync is paused for all folder pairs in the tray menu.");
+                                    }
+                                }
                             }
                             if in_sync_alpha > 0.0 && in_sync_ids.contains(&pair.id) {
                                 ui.add_space(8.0);
@@ -742,6 +741,9 @@ impl App {
                 ed.draft.local = ed.draft.local.trim().into();
                 ed.draft.remote = ed.draft.remote.trim().into();
                 ed.draft.remote_backup = ed.draft.remote_backup.trim().into();
+                if ed.draft.signature() != self.cfg.pairs[ed.index].signature() {
+                    ed.draft.auto_sync = false; // the state is gone: needs a manual sync again
+                }
                 log::info(format!("Folder pair changed: {}", ed.draft.label()));
                 self.cfg.pairs[ed.index] = ed.draft;
                 self.save();
@@ -749,6 +751,10 @@ impl App {
             }
         if let Some(i) = reset {
             engine::reset_state(&self.cfg.pairs[i]);
+            if self.cfg.pairs[i].auto_sync {
+                self.cfg.pairs[i].auto_sync = false; // needs a manual sync again
+                self.save();
+            }
             self.flash("Sync state reset");
         }
         if let Some((m, id)) = action
@@ -1211,19 +1217,6 @@ impl App {
         theme::page_header(ui, "Settings", "Changes are saved immediately");
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             theme::card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    theme::toggle(ui, &mut self.cfg.auto_sync);
-                    ui.label(theme::bold("Sync automatically", 16.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Every");
-                    ui.add(egui::DragValue::new(&mut self.cfg.interval_minutes).range(1..=1440));
-                    ui.label("minutes while Draisine is running in the tray.");
-                });
-                ui.label(theme::muted(ui, "New files and conflicts are applied automatically. Deletes and replacements always wait for your confirmation: the tray icon then turns orange."));
-            });
-            ui.add_space(6.0);
-            theme::card(ui, |ui| {
                 ui.label(theme::bold("Safety", 16.0));
                 ui.horizontal(|ui| {
                     ui.label("Warn if more than");
@@ -1405,7 +1398,7 @@ fn edit_form(ui: &mut Ui, p: &Pal, ed: &mut Edit, pair: &Pair, remotes: &[String
         });
         if d.signature() != pair.signature() {
             theme::callout(ui, p.blue, |ui| {
-                ui.label(RichText::new("ℹ  Folders or excludes changed: the next sync behaves like a first sync (nothing is deleted).").size(13.0));
+                ui.label(RichText::new("ℹ  Folders or excludes changed: the next sync behaves like a first sync (nothing is deleted). Auto-sync is turned off until then.").size(13.0));
             });
         }
         ui.add_space(6.0);

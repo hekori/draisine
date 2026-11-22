@@ -1,6 +1,8 @@
 //! Tray process: tray icon + menu, and the auto-sync worker.
 //!
-//! Auto-sync runs a two-way sync per enabled pair every N minutes but only executes actions that
+//! Auto-sync runs a two-way sync for each pair that has auto-sync on and has been synced manually at
+//! least once (see `engine::auto_sync_active`), every N minutes as set per pair, unless it is paused
+//! from the tray menu. It only executes actions that
 //! cannot lose data (new files, conflicts ➡ conflict files). Deletes and overwrites wait for the
 //! user's confirmation in the window; the tray badge turns orange and a notification is shown.
 
@@ -9,6 +11,7 @@ use crate::engine::{self, Mode};
 use crate::icon::{self, Status};
 use crate::{ipc, log};
 use anyhow::Result;
+use std::collections::HashMap;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,7 +39,7 @@ enum WorkerCmd {
 struct Shared {
     status: Status,
     text: String,
-    auto: bool,
+    paused: bool,
 }
 
 struct Items {
@@ -46,7 +49,7 @@ struct Items {
     pull: MenuItem,
     push: MenuItem,
     twoway: MenuItem,
-    auto: CheckMenuItem,
+    pause: CheckMenuItem,
     run_now: MenuItem,
     logs: MenuItem,
     log_dir: MenuItem,
@@ -70,7 +73,7 @@ impl App {
     fn refresh(&mut self) {
         let sh = self.shared.lock().unwrap().clone();
         self.items.status.set_text(&sh.text);
-        self.items.auto.set_checked(sh.auto);
+        self.items.pause.set_checked(sh.paused);
         if let Some(t) = &self.tray {
             let _ = t.set_icon(Some(tray_icon(sh.status)));
             let _ = t.set_tooltip(Some(format!("{APP_NAME}: {}", sh.text)));
@@ -90,10 +93,10 @@ impl App {
             ipc::request_window(Some(Mode::Push), token);
         } else if id == *i.twoway.id() {
             ipc::request_window(Some(Mode::TwoWay), token);
-        } else if id == *i.auto.id() {
+        } else if id == *i.pause.id() {
             let mut cfg = Config::load();
-            cfg.auto_sync = i.auto.is_checked();
-            log::info(format!("Auto-Sync {}", if cfg.auto_sync { "on" } else { "off" }));
+            cfg.auto_sync_paused = i.pause.is_checked();
+            log::info(format!("Auto-sync {}", if cfg.auto_sync_paused { "paused" } else { "resumed" }));
             if let Err(e) = cfg.save() {
                 log::error(format!("Saving configuration: {e}"));
             }
@@ -164,13 +167,22 @@ fn notify(body: &str) {
     let _ = notify_rust::Notification::new().summary(APP_NAME).body(body).appname(APP_NAME).show();
 }
 
+/// Ids of the pairs the background auto-sync includes right now.
+fn auto_pairs(cfg: &Config) -> Vec<String> {
+    cfg.pairs.iter().filter(|p| engine::auto_sync_active(p)).map(|p| p.id.clone()).collect()
+}
+
 fn idle_status(cfg: &Config) -> (Status, String) {
+    let n = auto_pairs(cfg).len();
     if cfg.pairs.is_empty() {
         (Status::Off, "no folder pairs set up".into())
-    } else if cfg.auto_sync {
-        (Status::Idle, format!("Auto-sync on (every {} min)", cfg.interval_minutes))
-    } else {
+    } else if n == 0 {
         (Status::Paused, "Auto-sync off".into())
+    } else if cfg.auto_sync_paused {
+        (Status::Paused, "Auto-sync paused".into())
+    } else {
+        let what = if n == 1 { "1 folder pair".to_string() } else { format!("{n} folder pairs") };
+        (Status::Idle, format!("Auto-sync on for {what}"))
     }
 }
 
@@ -227,8 +239,10 @@ fn classify(msg: &str) -> ErrorKind {
 
 fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: EventLoopProxy<UserEvent>) {
     let mut cfg = Config::load();
+    let mut auto_ids = auto_pairs(&cfg);
     let mut mtime = Config::mtime();
-    let mut last_run: Option<Instant> = None;
+    // Per pair: when auto-sync last ran it. Missing: due right away.
+    let mut last_run: HashMap<String, Instant> = HashMap::new();
     let mut last_note = String::new();
     let mut window_busy = false;
     let mut before_window: Option<(Status, String)> = None;
@@ -267,7 +281,7 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
                 let now = chrono::Local::now().format("%H:%M");
                 set(&shared, &proxy, Status::Attention, format!("Changes found in the preview ({now})"));
             }
-            Some(ipc::TrayNote::Changed) if cfg.auto_sync => {
+            Some(ipc::TrayNote::Changed) if !auto_ids.is_empty() && !cfg.auto_sync_paused => {
                 // A safe two-way run computes the real state: ✓, ! (still waiting), offline, …
                 force = true;
             }
@@ -285,16 +299,24 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
             }
             None => {}
         }
+        // A manual sync also changes which pairs may auto-sync (the first one makes them eligible).
         let m = Config::mtime();
-        if m != mtime {
-            mtime = m;
-            let new = Config::load();
-            let auto_changed = new.auto_sync != cfg.auto_sync;
-            cfg = new;
-            shared.lock().unwrap().auto = cfg.auto_sync;
-            if auto_changed {
-                last_run = None; // turning auto-sync on runs right away
+        let cfg_changed = m != mtime;
+        if cfg_changed || note.is_some() {
+            if cfg_changed {
+                mtime = m;
+                let new = Config::load();
+                if cfg.auto_sync_paused && !new.auto_sync_paused {
+                    last_run.clear(); // resuming runs right away
+                }
+                cfg = new;
+                shared.lock().unwrap().paused = cfg.auto_sync_paused;
             }
+            let ids = auto_pairs(&cfg);
+            last_run.retain(|id, _| ids.contains(id)); // turning auto-sync on for a pair runs it right away
+            auto_ids = ids;
+        }
+        if cfg_changed {
             let s = shared.lock().unwrap().status;
             if !sticky(s) {
                 let (st, t) = idle_status(&cfg);
@@ -303,15 +325,26 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
                 let _ = proxy.send_event(UserEvent::Refresh);
             }
         }
-        let interval = Duration::from_secs(cfg.interval_minutes.max(1) as u64 * 60);
-        let due = cfg.auto_sync && last_run.is_none_or(|t| t.elapsed() >= interval);
-        if !(due || force) {
+        // “Run auto-sync now” runs every auto-sync pair, even while paused.
+        let pairs: Vec<_> = cfg
+            .pairs
+            .iter()
+            .filter(|p| auto_ids.contains(&p.id))
+            .filter(|p| {
+                let interval = Duration::from_secs(p.interval_minutes.max(1) as u64 * 60);
+                force || (!cfg.auto_sync_paused && last_run.get(&p.id).is_none_or(|t| t.elapsed() >= interval))
+            })
+            .cloned()
+            .collect();
+        if pairs.is_empty() {
+            if force {
+                let (st, t) = idle_status(&cfg);
+                set(&shared, &proxy, st, t);
+            }
             continue;
         }
-        last_run = Some(Instant::now());
-        let pairs: Vec<_> = cfg.pairs.iter().filter(|p| p.enabled).cloned().collect();
-        if pairs.is_empty() {
-            continue;
+        for p in &pairs {
+            last_run.insert(p.id.clone(), Instant::now());
         }
         set(&shared, &proxy, Status::Busy, "Auto-sync running …".into());
         log::info("Auto-sync started");
@@ -407,7 +440,7 @@ pub fn run() -> Result<()> {
 
     let cfg = Config::load();
     let (st, text) = idle_status(&cfg);
-    let shared = Arc::new(Mutex::new(Shared { status: st, text, auto: cfg.auto_sync }));
+    let shared = Arc::new(Mutex::new(Shared { status: st, text, paused: cfg.auto_sync_paused }));
 
     let items = Items {
         status: MenuItem::new("", false, None),
@@ -416,7 +449,7 @@ pub fn run() -> Result<()> {
         pull: MenuItem::new("One-way sync remote ➡ local …", true, None),
         push: MenuItem::new("One-way sync local ➡ remote …", true, None),
         twoway: MenuItem::new("Two-way sync local ↔ remote …", true, None),
-        auto: CheckMenuItem::new("Auto-Sync", true, cfg.auto_sync, None),
+        pause: CheckMenuItem::new("Pause auto-sync", true, cfg.auto_sync_paused, None),
         run_now: MenuItem::new("Run auto-sync now", true, None),
         logs: MenuItem::new("Open log (TXT)", true, None),
         log_dir: MenuItem::new("Open log folder", true, None),
@@ -434,7 +467,7 @@ pub fn run() -> Result<()> {
         &items.push,
         &items.twoway,
         &sep(),
-        &items.auto,
+        &items.pause,
         &items.run_now,
         &sep(),
         &items.logs,

@@ -6,7 +6,7 @@ Tray app for safely syncing local folders with Google Drive, OneDrive, Dropbox a
 - **Diff** local ↔ remote
 - **One-way sync** remote ➡ local and local ➡ remote (mirroring)
 - **Two-way sync** local ↔ remote
-- **Auto-sync** on/off (two-way, in the background)
+- **Auto-sync** per folder pair with its own interval (two-way, in the background), available once the pair has been synced by hand; pause it for all pairs from the tray menu
 
 A single executable, no installation. The release archive ships the matching rclone right next to it.
 Linux (KDE, GNOME with the AppIndicator extension, …), Windows, macOS.
@@ -21,7 +21,7 @@ Linux (KDE, GNOME with the AppIndicator extension, …), Windows, macOS.
 | Conflict (changed on both sides) | Like Dropbox: the cloud version keeps the name, the local version is kept next to it on both sides as `name (<computer>'s conflicted copy YYYY-MM-DD).ext`. |
 | Rename (two-way) | A file deleted and a file created on the same side with the same size and content hash count as a rename, which is repeated on the other side instead of delete + copy. Ambiguous cases (several files with the same content) fall back to delete + copy. |
 | Preview | *Changes* shows both sides next to each other (`+` created, `−` removed, `~` replaced or renamed, `⚠` conflict) with the reason; *Compare* shows a line diff for text files. *Result* lists the files after applying and where their content comes from. |
-| Auto-sync | Only performs non-destructive actions (new files, conflicts). Deletes and overwrites wait: the tray icon turns orange and a notification appears. |
+| Auto-sync | Switched on per folder pair, and only after that pair's first sync was done by hand (changing its folders or excludes, or resetting its sync state, turns it off again). Each pair has its own interval; "Pause auto-sync" in the tray menu stops it for all pairs. Only performs non-destructive actions (new files, conflicts). Deletes and overwrites wait: the tray icon turns orange and a notification appears. |
 | Stale preview | Everything is compared again before applying. If a selected action has changed, nothing is applied. |
 | One side empty or missing | Stops if there were files there at the last sync (e.g. drive not mounted). |
 | Mass deletion | Above a configurable share (default 25 %) deletions are not preselected, and a warning is shown. |

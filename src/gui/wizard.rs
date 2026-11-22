@@ -64,7 +64,6 @@ pub struct Wizard {
     local: String,
     browser: RemoteBrowser,
     pair_name: String,
-    auto: bool,
     created_pair: Option<String>,
     /// Started via "new connection": do not preselect an existing one.
     prefer_new: bool,
@@ -87,7 +86,6 @@ impl Wizard {
             local: String::new(),
             browser: RemoteBrowser::new("", ""),
             pair_name: String::new(),
-            auto: false,
             created_pair: None,
             prefer_new,
         }
@@ -285,7 +283,6 @@ impl Wizard {
                 let pair = Pair { name, local, remote: self.browser.full(), ..Default::default() };
                 log::info(format!("Folder pair created: {} ({} ↔ {})", pair.label(), pair.local, pair.remote));
                 self.created_pair = Some(pair.id.clone());
-                self.auto = cfg.auto_sync;
                 cfg.pairs.push(pair);
                 if let Err(e) = cfg.save() {
                     log::error(format!("Saving configuration: {e}"));
@@ -591,22 +588,12 @@ impl Wizard {
         ui.label("Recommendation: look at the differences first. Nothing is changed while you do.");
         ui.add_space(8.0);
         theme::card(ui, |ui| {
-            ui.horizontal(|ui| {
-                if theme::toggle(ui, &mut self.auto).changed() {
-                    cfg.auto_sync = self.auto;
-                    let _ = cfg.save();
-                }
-                ui.vertical(|ui| {
-                    ui.label(theme::bold("Sync automatically", 14.5));
-                    ui.label(theme::muted(
-                        ui,
-                        format!(
-                            "Every {} minutes in the background. Deletes and overwrites always wait for you.",
-                            cfg.interval_minutes
-                        ),
-                    ));
-                });
-            });
+            ui.label(theme::bold("🔄  Sync automatically", 14.5));
+            ui.label(theme::muted(
+                ui,
+                "After the first sync, which you do by hand, you can turn on auto-sync on the folder \
+                 pair's card and choose how often it runs. Deletes and overwrites always wait for you.",
+            ));
         });
     }
 }
