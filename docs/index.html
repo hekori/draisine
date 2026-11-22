@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draisine – safe sync for Google Drive, OneDrive & Dropbox</title>
+<meta name="description" content="A tray app that syncs local folders with Google Drive, OneDrive, Dropbox and 70+ other clouds. It never deletes or overwrites anything without asking. Linux, Windows, macOS. Free and open source.">
+<link rel="icon" type="image/png" href="favicon.png">
+<meta property="og:title" content="Draisine – safe cloud sync">
+<meta property="og:description" content="Sync local folders with Google Drive, OneDrive, Dropbox and more. Nothing is deleted or overwritten without your confirmation.">
+<meta property="og:type" content="website">
+<style>
+  :root {
+    --bg: #f4f5f7; --surface: #ffffff; --border: #dfe2e8; --text: #1c2027; --muted: #5f6672;
+    --accent: #1f8a5b; --accent-soft: #dcf1e6; --warn: #b4690e; --warn-soft: #fbecd6;
+    --err: #c82a2a; --code: #eceef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --surface: #21242b; --border: #323741; --text: #e8eaee; --muted: #9aa1ad;
+      --accent: #4cc28a; --accent-soft: #1f3a2e; --warn: #f0a94e; --warn-soft: #3d2f1c;
+      --err: #f07a7a; --code: #2a2e36;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+
+  /* nav */
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 19px; color: var(--text); text-decoration: none; }
+  .logo {
+    display: inline-block; background: currentColor;
+    -webkit-mask: url(logo.png) center / contain no-repeat; mask: url(logo.png) center / contain no-repeat;
+  }
+  .brand .logo { width: 30px; height: 30px; }
+  nav .links { display: flex; gap: 22px; font-size: 15px; }
+  nav .links a { color: var(--muted); text-decoration: none; }
+  nav .links a:hover { color: var(--text); }
+
+  /* hero */
+  .hero { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; padding: 56px 0 72px; }
+  .hero h1 { font-size: clamp(34px, 5.2vw, 54px); line-height: 1.08; letter-spacing: -.02em; margin: 0 0 18px; font-weight: 700; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .lead { font-size: 19px; color: var(--muted); margin: 0 0 28px; max-width: 34em; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 10px;
+    font-weight: 600; font-size: 16px; text-decoration: none; border: 1px solid var(--border);
+    color: var(--text); background: var(--surface);
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .btn.primary { color: #0f1a14; } }
+  .btn:hover { filter: brightness(1.06); }
+  .platforms { margin-top: 16px; font-size: 14px; color: var(--muted); }
+  .hero-art { display: flex; justify-content: center; }
+  .hero-art .logo { width: min(320px, 70vw); aspect-ratio: 1; color: var(--text); opacity: .92; }
+
+  /* sections */
+  section { padding: 64px 0; border-top: 1px solid var(--border); }
+  h2 { font-size: 30px; letter-spacing: -.01em; margin: 0 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 36px; max-width: 42em; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .glyph { font-size: 22px; line-height: 1; margin-bottom: 12px; display: block; }
+
+  .safety { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .safety .card { display: grid; grid-template-columns: 36px 1fr; gap: 0 14px; }
+  .safety .dot {
+    width: 36px; height: 36px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+
+  .shot { margin: 0; }
+  .shot img { display: block; width: 100%; max-width: 980px; height: auto; margin: 0 auto; }
+
+  /* decision table */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 600px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; font-size: 15px; }
+  th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  thead th { background: var(--code); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  tbody th { font-weight: 600; white-space: nowrap; }
+  .ask { color: var(--warn); font-weight: 600; font-size: 13px; }
+  .conflict { color: var(--err); font-weight: 600; }
+  .note { font-size: 15px; color: var(--muted); margin-top: 18px; max-width: 48em; }
+
+  /* steps */
+  ol.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  ol.steps li { counter-increment: s; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; font-size: 15px; color: var(--muted); }
+  ol.steps li::before { content: counter(s); display: block; font-size: 28px; font-weight: 700; color: var(--accent); line-height: 1; margin-bottom: 10px; }
+  ol.steps strong { color: var(--text); display: block; margin-bottom: 4px; font-size: 16px; }
+
+  code, pre { font-family: ui-monospace, "SF Mono", "Cascadia Code", "Noto Sans Mono", monospace; font-size: 14px; }
+  code { background: var(--code); padding: 2px 6px; border-radius: 5px; }
+  pre { background: var(--code); padding: 16px 18px; border-radius: 12px; overflow-x: auto; margin: 0; line-height: 1.5; }
+
+  footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 760px) {
+    nav .links { display: none; }
+    .hero { grid-template-columns: 1fr; padding: 24px 0 48px; gap: 8px; }
+    .hero-art { order: -1; justify-content: flex-start; }
+    .hero-art .logo { width: 96px; }
+    section { padding: 48px 0; }
+    h2 { font-size: 25px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <nav>
+    <a class="brand" href="#"><span class="logo" aria-hidden="true"></span>Draisine</a>
+    <div class="links">
+      <a href="#safety">Safety</a>
+      <a href="#two-way">How it decides</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/hekori/draisine">GitHub</a>
+    </div>
+  </nav>
+
+  <div class="hero">
+    <div>
+      <h1>Cloud sync that <em>asks before it deletes.</em></h1>
+      <p class="lead">Draisine is a small tray app that keeps local folders in sync with Google Drive, OneDrive, Dropbox and dozens of other clouds. Every delete and overwrite is shown to you first. Nothing disappears without your confirmation.</p>
+      <div class="cta">
+        <a class="btn primary" href="#download">Download</a>
+        <a class="btn" href="https://github.com/hekori/draisine">View on GitHub</a>
+      </div>
+      <p class="platforms">Linux · Windows · macOS — a single file, no installation. Free and open source (MIT).</p>
+    </div>
+    <div class="hero-art"><span class="logo" role="img" aria-label="Draisine logo: a file on a rail handcar"></span></div>
+  </div>
+</header>
+
+<main>
+  <section id="screenshot">
+    <div class="wrap">
+      <h2>See the result before anything changes</h2>
+      <p class="sub">The preview shows every file after the sync and where its content will come from: this computer, the cloud, a rename, or a conflict copy. Deleted files are crossed out and go to the trash.</p>
+      <figure class="shot">
+        <a href="img/result.webp"><img src="img/result.webp" width="1250" height="918" loading="lazy"
+             alt="Draisine's sync preview, Result tab: a list of files in the Documents folder showing which come from this computer, which from the cloud, one renamed file, one file moved to the trash and one conflict copy. Buttons at the bottom: Cancel, Check again, Apply 7 changes."></a>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Four ways to sync</h2>
+      <p class="sub">Pick a folder on your computer and a folder in the cloud. Then choose what should happen.</p>
+      <div class="grid">
+        <div class="card"><span class="glyph">⇆</span><h3>Diff</h3><p>See what differs between local and remote, side by side. Text files get a line-by-line comparison.</p></div>
+        <div class="card"><span class="glyph">⬇</span><h3>Pull</h3><p>Make the local folder an exact copy of the cloud folder.</p></div>
+        <div class="card"><span class="glyph">⬆</span><h3>Push</h3><p>Make the cloud folder an exact copy of the local folder.</p></div>
+        <div class="card"><span class="glyph">↻</span><h3>Two-way &amp; auto-sync</h3><p>Changes on either side reach the other. Auto-sync runs in the background and does only harmless things on its own.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="safety">
+    <div class="wrap">
+      <h2>Built so you don't lose files</h2>
+      <p class="sub">Sync tools that silently delete the wrong thing are how people lose work. Draisine is built around a few strict rules.</p>
+      <div class="safety">
+        <div class="card"><span class="dot">1</span><div><h3>You confirm every delete and overwrite</h3><p>A preview lists each change with the reason, with checkboxes. Nothing destructive happens until you confirm.</p></div></div>
+        <div class="card"><span class="dot">2</span><div><h3>Deleted files go to the trash</h3><p>Locally, old files go to the system trash. If that fails, nothing is touched. In the cloud, they can go to a backup folder instead.</p></div></div>
+        <div class="card"><span class="dot">3</span><div><h3>Conflicts keep both versions</h3><p>Changed on both sides? You get <code>name (laptop's conflicted copy 2026-11-22).txt</code> next to the original, like Dropbox does.</p></div></div>
+        <div class="card"><span class="dot">4</span><div><h3>Auto-sync never deletes on its own</h3><p>Background sync only adds files. Deletes and overwrites wait for you: the tray icon turns orange and you get a notification.</p></div></div>
+        <div class="card"><span class="dot">5</span><div><h3>Stops on suspicious situations</h3><p>A drive that isn't mounted, a folder that suddenly looks empty, or a mass deletion (25 % by default) makes it stop and warn you.</p></div></div>
+        <div class="card"><span class="dot">6</span><div><h3>Checks content, not just dates</h3><p>Same size and timestamp isn't enough. Without a verified sync state, files are compared by hash, and everything is checked again just before applying.</p></div></div>
+      </div>
+      <p class="note">Every action is written to a daily log file that is never deleted, so you can always look up what happened.</p>
+    </div>
+  </section>
+
+  <section id="two-way">
+    <div class="wrap">
+      <h2>How two-way sync decides</h2>
+      <p class="sub">After each sync, Draisine remembers what both sides looked like. Next time, each side is compared with <em>its own</em> last state, so it can tell a deleted file from a new one.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Local ↓ &nbsp;/&nbsp; Cloud →</th><th>unchanged</th><th>new or changed</th><th>deleted</th></tr></thead>
+          <tbody>
+            <tr><th>unchanged</th><td>nothing</td><td>update local <span class="ask">· asks</span></td><td>delete local <span class="ask">· asks, to trash</span></td></tr>
+            <tr><th>new or changed</th><td>update cloud <span class="ask">· asks</span></td><td>same content: nothing<br><span class="conflict">otherwise: conflict, keep both</span></td><td>restore to cloud</td></tr>
+            <tr><th>deleted</th><td>delete in cloud <span class="ask">· asks</span></td><td>restore locally</td><td>nothing</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">On the very first sync there is no saved state yet. Then nothing is ever deleted, and files that differ become conflicts. Renames are recognised by size and content hash and repeated on the other side instead of a delete plus a fresh upload.</p>
+    </div>
+  </section>
+
+  <section id="download">
+    <div class="wrap">
+      <h2>Get started</h2>
+      <p class="sub">Download the archive for your system and run it. The matching <a href="https://rclone.org">rclone</a> is included, which does the actual transfer and supports more than 70 cloud services.</p>
+      <ol class="steps">
+        <li><strong>Download</strong>Get the archive for Linux, Windows or macOS from the <a href="https://github.com/hekori/draisine/releases/latest">latest release</a>.</li>
+        <li><strong>Unpack and run</strong>No installer. Draisine appears in your system tray.</li>
+        <li><strong>Connect your cloud</strong>A setup assistant opens on first start. You sign in to your cloud in the browser.</li>
+        <li><strong>Choose folders</strong>Pick a local folder and a cloud folder, look at the preview, and sync.</li>
+      </ol>
+      <p class="note">Linux: works on KDE, and on GNOME with the AppIndicator extension. Prefer to build it yourself?</p>
+      <pre>git clone https://github.com/hekori/draisine
+cd draisine
+cargo build --release   # target/release/draisine</pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Why “Draisine”?</h2>
+      <p class="sub" style="margin-bottom:0">Karl Drais built his running machine in Mannheim in 1817. The name later stuck to the small rail handcars that shuttle back and forth between two points, just like your files between your computer and the cloud.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Draisine · MIT licence · transfers powered by <a href="https://rclone.org">rclone</a></span>
+    <span><a href="https://github.com/hekori/draisine">Source</a> · <a href="https://github.com/hekori/draisine/issues">Report a problem</a> · <a href="https://github.com/hekori/draisine/releases">Releases</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
