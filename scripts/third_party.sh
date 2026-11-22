@@ -28,6 +28,11 @@ Noto Sans (Regular, SemiBold)
   License: SIL Open Font License 1.1
   https://github.com/notofonts/latin-greek-cyrillic
 
+Material Design Icons 6.5.95 (icon font)
+  Copyright Pictogrammers
+  License: Apache-2.0
+  https://pictogrammers.com/library/mdi/  ·  https://github.com/Templarian/MaterialDesign-Webfont
+
 Rust crates
 -----------
 HDR

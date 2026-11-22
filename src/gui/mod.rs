@@ -1000,11 +1000,14 @@ impl App {
                     let used = self.cfg.pairs.iter().filter(|pp| pp.remote.split(':').next() == Some(name.as_str())).count();
                     theme::card(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("☁").size(22.0).color(p.accent));
+                            theme::provider_icon(ui, &typ, 26.0);
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(theme::bold(&name, 16.0));
-                                    theme::badge(ui, &typ, p.blue);
+                                    // The logo already shows the provider; label only the others.
+                                    if !theme::has_logo(&typ) {
+                                        theme::badge(ui, &typ, p.blue);
+                                    }
                                 });
                                 ui.label(theme::muted(ui, if used == 0 { "not used by any folder pair".to_string() } else { format!("used by {used} folder pair{}", if used == 1 { "" } else { "s" }) }));
                             });
@@ -1215,6 +1218,7 @@ fn about_page(ui: &mut Ui) {
                 ("rclone (bundled)", "MIT", "https://rclone.org"),
                 ("egui / eframe", "MIT or Apache-2.0", "https://github.com/emilk/egui"),
                 ("Noto Sans font", "SIL Open Font License 1.1", "https://github.com/notofonts/latin-greek-cyrillic"),
+                ("Material Design Icons", "Apache-2.0", "https://pictogrammers.com/library/mdi/"),
             ] {
                 ui.horizontal(|ui| {
                     if theme::link(ui, name).clicked() {

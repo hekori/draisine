@@ -30,9 +30,9 @@ struct Provider {
 }
 
 const PROVIDERS: [Provider; 6] = [
-    Provider { icon: "🔺", name: "Google Drive", typ: "drive", default_name: "gdrive" },
-    Provider { icon: "☁", name: "OneDrive", typ: "onedrive", default_name: "onedrive" },
-    Provider { icon: "📦", name: "Dropbox", typ: "dropbox", default_name: "dropbox" },
+    Provider { icon: "logo:drive", name: "Google Drive", typ: "drive", default_name: "gdrive" },
+    Provider { icon: "logo:onedrive", name: "OneDrive", typ: "onedrive", default_name: "onedrive" },
+    Provider { icon: "logo:dropbox", name: "Dropbox", typ: "dropbox", default_name: "dropbox" },
     Provider { icon: "☁", name: "pCloud", typ: "pcloud", default_name: "pcloud" },
     Provider { icon: "📦", name: "Box", typ: "box", default_name: "box" },
     Provider { icon: "⚙", name: "Other …", typ: "", default_name: "" },
@@ -381,7 +381,8 @@ impl Wizard {
             ui.horizontal_wrapped(|ui| {
                 for (n, t) in &remotes {
                     let sel = self.existing.as_deref() == Some(n.as_str());
-                    if theme::choice_card(ui, vec2(170.0, 96.0), sel, "🔗", n, t).clicked() {
+                    let icon = if theme::has_logo(t) { format!("logo:{t}") } else { "🔗".to_string() };
+                    if theme::choice_card(ui, vec2(170.0, 96.0), sel, &icon, n, theme::provider_name(t)).clicked() {
                         self.existing = Some(n.clone());
                     }
                 }

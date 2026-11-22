@@ -7,6 +7,12 @@ use eframe::egui::{
 use std::sync::Arc;
 
 pub const BOLD: &str = "bold";
+pub const ICONS: &str = "mdi";
+
+/// Font for Material Design Icons glyphs (see `mdi` for code points).
+pub fn icon_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(ICONS.into()))
+}
 
 #[derive(Clone, Copy)]
 pub struct Pal {
@@ -107,6 +113,9 @@ pub fn install(ctx: &egui::Context) {
     let mut bold = vec!["noto-semibold".to_string()];
     bold.extend(fallback);
     fonts.families.insert(FontFamily::Name(BOLD.into()), bold);
+    // Material Design Icons 6.5.95 (Pictogrammers, Apache-2.0): only used via `icon_font`.
+    fonts.font_data.insert(ICONS.into(), Arc::new(FontData::from_static(include_bytes!("../../assets/fonts/MaterialDesignIcons.ttf"))));
+    fonts.families.insert(FontFamily::Name(ICONS.into()), vec![ICONS.into()]);
     ctx.set_fonts(fonts);
 
     ctx.set_visuals_of(Theme::Light, visuals(LIGHT, false));
@@ -317,7 +326,12 @@ pub fn choice_card(ui: &mut Ui, size: Vec2, selected: bool, icon: &str, title: &
     let fill = if selected { p.accent_soft } else { p.surface };
     let painter = ui.painter();
     painter.rect(rect, 12.0, fill, stroke, egui::StrokeKind::Inside);
-    painter.text(rect.left_top() + vec2(16.0, 14.0), Align2::LEFT_TOP, icon, FontId::proportional(22.0), p.accent);
+    // `icon` is a glyph, or "logo:<rclone type>" for that provider's icon.
+    if let Some(typ) = icon.strip_prefix("logo:") {
+        paint_provider_icon(painter, rect.left_top() + vec2(30.0, 27.0), typ, 28.0, p.accent);
+    } else {
+        painter.text(rect.left_top() + vec2(16.0, 14.0), Align2::LEFT_TOP, icon, FontId::proportional(22.0), p.accent);
+    }
     painter.text(rect.left_top() + vec2(16.0, 48.0), Align2::LEFT_TOP, title, FontId::new(15.0, FontFamily::Name(BOLD.into())), p.text);
     if !sub.is_empty() {
         painter.text(rect.left_top() + vec2(16.0, 70.0), Align2::LEFT_TOP, sub, FontId::proportional(12.5), p.muted);
@@ -361,4 +375,56 @@ pub fn path_line(ui: &mut Ui, icon: &str, path: &str) -> Response {
     }
     ui.add(egui::Label::new(RichText::new(format!("{icon}  {short}")).color(pal(ui).muted)).truncate())
         .on_hover_text(path)
+}
+
+// ------------------------------------------------------------------ provider logos
+
+/// Material Design Icons code points (https://pictogrammers.com/library/mdi/, v6.5.95).
+pub mod mdi {
+    pub const GOOGLE_DRIVE: char = '\u{F02B6}';
+    pub const DROPBOX: char = '\u{F01E3}';
+    pub const MICROSOFT_ONEDRIVE: char = '\u{F03CA}';
+    pub const CLOUD_OUTLINE: char = '\u{F0163}';
+}
+
+/// Brand icon and color for an rclone backend type, if it has one.
+pub fn provider_glyph(typ: &str) -> Option<(char, Color32)> {
+    match typ {
+        "drive" => Some((mdi::GOOGLE_DRIVE, Color32::from_rgb(0x1f, 0xa4, 0x63))),
+        "dropbox" => Some((mdi::DROPBOX, Color32::from_rgb(0x00, 0x61, 0xff))),
+        "onedrive" => Some((mdi::MICROSOFT_ONEDRIVE, Color32::from_rgb(0x00, 0x78, 0xd4))),
+        _ => None,
+    }
+}
+
+/// rclone backend types that have a brand icon.
+pub fn has_logo(typ: &str) -> bool {
+    provider_glyph(typ).is_some()
+}
+
+/// Human-readable name of an rclone backend type.
+pub fn provider_name(typ: &str) -> &str {
+    match typ {
+        "drive" => "Google Drive",
+        "dropbox" => "Dropbox",
+        "onedrive" => "OneDrive",
+        "pcloud" => "pCloud",
+        "box" => "Box",
+        t => t,
+    }
+}
+
+/// Paints the provider's icon (or a cloud for unknown types) centered at `center`.
+pub fn paint_provider_icon(painter: &egui::Painter, center: egui::Pos2, typ: &str, size: f32, fallback: Color32) {
+    let (glyph, color) = provider_glyph(typ).unwrap_or((mdi::CLOUD_OUTLINE, fallback));
+    painter.text(center, Align2::CENTER_CENTER, glyph, icon_font(size), color);
+}
+
+/// Square provider icon: the provider's brand icon, or a cloud for unknown types.
+pub fn provider_icon(ui: &mut Ui, typ: &str, size: f32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        paint_provider_icon(ui.painter(), rect.center(), typ, size, pal(ui).accent);
+    }
+    resp.on_hover_text(provider_name(typ))
 }
