@@ -1,6 +1,6 @@
 [package]
 name = "draisine"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Portable tray app for safe rclone sync (diff, 1-way, 2-way) between a local folder and a cloud remote"
 license = "MIT"

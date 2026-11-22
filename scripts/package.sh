@@ -19,7 +19,6 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 case "$TARGET" in
   x86_64-unknown-linux-gnu)  OS=linux;   ARCH=x86_64;  RC=linux-amd64 ;;
   aarch64-unknown-linux-gnu) OS=linux;   ARCH=aarch64; RC=linux-arm64 ;;
-  x86_64-apple-darwin)       OS=macos;   ARCH=x86_64;  RC=osx-amd64 ;;
   aarch64-apple-darwin)      OS=macos;   ARCH=aarch64; RC=osx-arm64 ;;
   x86_64-pc-windows-*)       OS=windows; ARCH=x86_64;  RC=windows-amd64 ;;
   aarch64-pc-windows-*)      OS=windows; ARCH=aarch64; RC=windows-arm64 ;;
