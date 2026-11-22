@@ -1,6 +1,7 @@
 //! Window process (started by the tray with `--window`).
 
 mod browser;
+mod preview;
 mod theme;
 mod wizard;
 
@@ -9,7 +10,7 @@ use crate::engine::{self, Action, Mode, Plan, Report};
 use crate::rclone::{Cancel, Entry, Rclone};
 use crate::{icon, ipc, log};
 use browser::RemoteBrowser;
-use eframe::egui::{self, Color32, CursorIcon, Layout, Margin, RichText, Sense, Ui, vec2};
+use eframe::egui::{self, Color32, CursorIcon, Layout, Margin, RichText, Ui, vec2};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -83,6 +84,11 @@ struct App {
     progress: Arc<Mutex<Vec<String>>>,
     confirm: bool,
     filter: String,
+    view: preview::View,
+    /// Summary chip clicked: show only this kind of change.
+    only: Option<Action>,
+    show_same: bool,
+    diffs: preview::Diffs,
     log_text: String,
     log_loaded: Instant,
     last_poll: Instant,
@@ -139,16 +145,22 @@ fn action_color(p: &Pal, a: Action) -> Color32 {
         Action::DeleteLocal | Action::DeleteRemote => p.red,
         Action::OverwriteLocal | Action::OverwriteRemote | Action::Conflict | Action::Different => p.orange,
         Action::CopyToLocal | Action::CopyToRemote => p.green,
-        Action::OnlyLocal | Action::OnlyRemote => p.blue,
+        Action::RenameLocal | Action::RenameRemote | Action::OnlyLocal | Action::OnlyRemote => p.blue,
     }
 }
 
-const GROUPS: [(Action, &str, &str); 10] = [
-    (Action::Conflict, "Conflicts", "Changed on both sides. Both versions are kept as conflict files."),
+const GROUPS: [(Action, &str, &str); 12] = [
+    (
+        Action::Conflict,
+        "Conflicts",
+        "Changed on both sides. The cloud version keeps the name, yours is kept as a conflicted copy.",
+    ),
     (Action::DeleteLocal, "Delete on this computer", "The files go to the trash."),
     (Action::DeleteRemote, "Delete in the cloud", "They go to the backup folder or the provider's trash."),
     (Action::OverwriteLocal, "Replace on this computer", "The old version goes to the trash."),
     (Action::OverwriteRemote, "Replace in the cloud", "Old version: backup folder or the provider's version history."),
+    (Action::RenameLocal, "Rename on this computer", "Renamed in the cloud."),
+    (Action::RenameRemote, "Rename in the cloud", "Renamed on this computer."),
     (Action::CopyToRemote, "Upload", "New in the cloud."),
     (Action::CopyToLocal, "Download", "New on this computer."),
     (Action::Different, "Different", "Same name, different content."),
@@ -188,6 +200,10 @@ impl App {
             progress: Arc::new(Mutex::new(Vec::new())),
             confirm: false,
             filter: String::new(),
+            view: preview::View::Changes,
+            only: None,
+            show_same: false,
+            diffs: HashMap::new(),
             log_text: String::new(),
             log_loaded: Instant::now() - Duration::from_secs(60),
             last_poll: Instant::now(),
@@ -267,6 +283,10 @@ impl App {
         self.wizard = None;
         self.confirm = false;
         self.filter.clear();
+        self.view = preview::View::Changes;
+        self.only = None;
+        self.show_same = false;
+        self.diffs.clear();
         if pairs.is_empty() {
             self.job = Job::Review(mode, vec![Err("No active folder pair. Add one in the overview.".into())]);
             return;
@@ -686,7 +706,8 @@ impl App {
 
     fn review(&mut self, ui: &mut Ui) {
         let p = pal(ui);
-        let Job::Review(mode, plans) = &mut self.job else { return };
+        let App { job, cfg, filter, view, only, show_same, diffs, .. } = self;
+        let Job::Review(mode, plans) = job else { return };
         let mode = *mode;
         let sub = if mode == Mode::Diff {
             "View only: nothing will be changed."
@@ -695,29 +716,48 @@ impl App {
         };
         theme::page_header(ui, &format!("Preview: {}", mode_title(mode)), sub);
 
-        // Summary chips
+        // Summary chips (click: show only that kind of change)
         ui.horizontal_wrapped(|ui| {
-            for (a, title, _) in GROUPS {
+            for (a, title, desc) in GROUPS {
                 let n: usize = plans.iter().filter_map(|x| x.as_ref().ok()).map(|pl| pl.count(|i| i.action == a)).sum();
                 if n > 0 {
-                    theme::badge(ui, &format!("{n}  {title}"), action_color(&p, a));
+                    let active = only.map(|o| o == a);
+                    let r = preview::chip(ui, &format!("{n}  {title}"), action_color(&p, a), active);
+                    let r = if desc.is_empty() { r } else { r.on_hover_text(desc) };
+                    if r.clicked() {
+                        *only = if *only == Some(a) { None } else { Some(a) };
+                    }
                 }
             }
             let same: usize = plans.iter().filter_map(|x| x.as_ref().ok()).map(|pl| pl.in_sync.len()).sum();
             theme::badge(ui, &format!("{same}  already identical"), p.muted);
+            if only.is_some() && theme::link(ui, "show all").clicked() {
+                *only = None;
+            }
         });
         ui.add_space(4.0);
-        ui.add(
-            egui::TextEdit::singleline(&mut self.filter)
-                .hint_text("🔍  Filter files …")
-                .desired_width(320.0)
-                .margin(Margin::symmetric(10, 6)),
-        );
-        let filter = self.filter.to_lowercase();
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(filter)
+                    .hint_text("🔍  Filter files …")
+                    .desired_width(320.0)
+                    .margin(Margin::symmetric(10, 6)),
+            );
+            if mode != Mode::Diff {
+                ui.add_space(12.0);
+                ui.selectable_value(view, preview::View::Changes, "Changes")
+                    .on_hover_text("What happens on each side, and why");
+                ui.selectable_value(view, preview::View::Result, "Result")
+                    .on_hover_text("Which files you will have after applying, and what they contain");
+            }
+        });
+        let text = filter.to_lowercase();
+        let f = preview::Filter { text: &text, only: *only };
+        let view = if mode == Mode::Diff { preview::View::Changes } else { *view };
         ui.add_space(4.0);
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for (pi, plan) in plans.iter_mut().enumerate() {
+            for plan in plans.iter_mut() {
                 let plan = match plan {
                     Ok(pl) => pl,
                     Err(e) => {
@@ -743,55 +783,12 @@ impl App {
                         ui.label(theme::bold("✔  Everything in sync, nothing to do.", 15.0).color(p.green));
                         return;
                     }
-                    for (a, title, desc) in GROUPS {
-                        let idx: Vec<usize> = plan
-                            .items
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, it)| it.action == a && (filter.is_empty() || it.path.to_lowercase().contains(&filter)))
-                            .map(|(i, _)| i)
-                            .collect();
-                        if idx.is_empty() {
-                            continue;
-                        }
-                        ui.add_space(10.0);
-                        let color = action_color(&p, a);
-                        ui.horizontal(|ui| {
-                            if mode != Mode::Diff {
-                                let n_sel = idx.iter().filter(|&&i| plan.items[i].selected).count();
-                                let mut all = n_sel == idx.len();
-                                let cb = egui::Checkbox::without_text(&mut all).indeterminate(n_sel > 0 && n_sel < idx.len());
-                                if ui.add(cb).changed() {
-                                    for &i in &idx {
-                                        plan.items[i].selected = all;
-                                    }
-                                }
-                            }
-                            let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
-                            ui.painter().circle_filled(r.center(), 5.0, color);
-                            ui.label(theme::bold(title, 15.0));
-                            ui.label(theme::muted(ui, format!("{}", idx.len())));
-                            if !desc.is_empty() {
-                                ui.label(theme::muted(ui, format!("·  {desc}")).small());
-                            }
-                        });
-                        const MAX: usize = 300;
-                        egui::Frame::new()
-                            .fill(p.surface2)
-                            .corner_radius(8)
-                            .inner_margin(Margin::symmetric(10, 4))
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                for &i in idx.iter().take(MAX) {
-                                    file_row(ui, &p, &mut plan.items[i], mode != Mode::Diff);
-                                }
-                                if idx.len() > MAX {
-                                    ui.label(theme::muted(ui, format!("… and {} more (use the filter)", idx.len() - MAX)));
-                                }
-                            });
+                    ui.add_space(8.0);
+                    match view {
+                        preview::View::Changes => preview::changes(ui, &p, cfg, plan, mode, &f, diffs),
+                        preview::View::Result => preview::result(ui, &p, plan, &f, show_same),
                     }
                 });
-                let _ = pi;
                 ui.add_space(8.0);
             }
         });
@@ -902,14 +899,15 @@ impl App {
                 theme::callout(ui, p.orange, |ui| {
                     ui.label(theme::bold(format!("⚠  {conflicts} conflict(s): both versions were kept"), 15.0).color(p.orange));
                     for r in results.iter().filter_map(|r| r.as_ref().ok()) {
-                        for (orig, l, rr) in &r.1.conflicts {
-                            ui.label(RichText::new(format!("{orig}\n    ➡ {l}\n    ➡ {rr}")).size(13.0));
+                        for (path, copy) in &r.1.conflicts {
+                            ui.label(RichText::new(format!("{path}   ➡ cloud version\n{copy}   ➡ your version")).size(13.0));
                         }
                     }
                     ui.add_space(4.0);
                     ui.label(
-                        "To resolve a conflict: open both files, rename the correct one back to the \
-                         original name and delete the other. The next sync picks that up.",
+                        "To resolve a conflict: compare both files, copy what you need from the \
+                         conflicted copy into the original and delete the copy. The next sync picks \
+                         that up on both sides.",
                     );
                 });
             }
@@ -1307,35 +1305,6 @@ fn edit_form(ui: &mut Ui, p: &Pal, ed: &mut Edit, pair: &Pair, remotes: &[String
 fn field(ui: &mut Ui, label: &str) {
     ui.add_space(4.0);
     ui.label(RichText::new(label).size(13.0).color(pal(ui).muted));
-}
-
-fn file_row(ui: &mut Ui, p: &Pal, it: &mut engine::Item, selectable: bool) {
-    ui.horizontal(|ui| {
-        ui.set_min_height(28.0);
-        if selectable {
-            ui.add(egui::Checkbox::without_text(&mut it.selected));
-        }
-        let (dir, file) = match it.path.rfind('/') {
-            Some(i) => (&it.path[..=i], &it.path[i + 1..]),
-            None => ("", it.path.as_str()),
-        };
-        let mut job = egui::text::LayoutJob::default();
-        let f = egui::FontId::proportional(14.0);
-        job.append(dir, 0.0, egui::TextFormat::simple(f.clone(), p.muted));
-        job.append(file, 0.0, egui::TextFormat::simple(f, p.text));
-        let resp = ui.add(egui::Label::new(job).truncate());
-        if !it.reason.is_empty() {
-            resp.on_hover_text(&it.reason);
-        }
-        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-            let meta = |e: &Option<Entry>| e.as_ref().map(|e| format!("{}  {}", human(e.size), when(e))).unwrap_or_else(|| "–".into());
-            ui.label(RichText::new(format!("☁ {}", meta(&it.remote))).size(12.0).color(p.muted));
-            ui.label(RichText::new(format!("💻 {}", meta(&it.local))).size(12.0).color(p.muted));
-            if !it.reason.is_empty() {
-                ui.label(RichText::new(&it.reason).size(12.0).color(p.muted.gamma_multiply(0.8)));
-            }
-        });
-    });
 }
 
 impl eframe::App for App {

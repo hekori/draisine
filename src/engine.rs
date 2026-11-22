@@ -6,16 +6,17 @@
 //! in the meantime the execution is aborted.
 //!
 //! Two-way sync compares each side with its own listing from the last successful sync
-//! (stored in the state file), so it knows which side changed. Files changed on both sides are
-//! conflicts: both versions are kept as `name-YYYY-MM-DDTHH-MM-SSZ-local.ext` and
-//! `name-YYYY-MM-DDTHH-MM-SSZ-remote.ext` on both sides.
+//! (stored in the state file), so it knows which side changed. A file renamed on one side
+//! (old name deleted, new name with the same content created) is renamed on the other side too.
+//! Files changed on both sides are conflicts: the cloud version keeps the name, the local version
+//! is kept next to it as `name (<computer>'s conflicted copy YYYY-MM-DD).ext` on both sides.
 
 use crate::config::{Config, Pair, dirs};
 use crate::log;
 use crate::rclone::{Cancel, Entry, Listing, Rclone, join};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -61,7 +62,12 @@ pub enum Action {
     DeleteRemote,
     /// Move the local file to the trash.
     DeleteLocal,
-    /// Changed on both sides: keep both versions as conflict files on both sides.
+    /// Renamed in the cloud: rename the local file `from` -> `path` too.
+    RenameLocal,
+    /// Renamed locally: rename the remote file `from` -> `path` too.
+    RenameRemote,
+    /// Changed on both sides: the cloud version keeps the name, the local version is kept as
+    /// `copy_name` on both sides.
     Conflict,
     // Diff only:
     OnlyLocal,
@@ -84,12 +90,25 @@ impl Action {
             Action::OverwriteLocal => "⬅ overwrite local",
             Action::DeleteRemote => "✖ delete remote",
             Action::DeleteLocal => "✖ delete local (trash)",
+            Action::RenameLocal => "⬅ rename local",
+            Action::RenameRemote => "➡ rename remote",
             Action::Conflict => "⚠ conflict: keep both",
             Action::OnlyLocal => "local only",
             Action::OnlyRemote => "remote only",
             Action::Different => "different",
         }
     }
+}
+
+/// What happened to a file on one side since the last sync.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Change {
+    /// Not there now and not at the last sync.
+    Absent,
+    New,
+    Unchanged,
+    Modified,
+    Deleted,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +118,13 @@ pub struct Item {
     pub reason: String,
     pub local: Option<Entry>,
     pub remote: Option<Entry>,
+    pub local_change: Change,
+    pub remote_change: Change,
+    /// Renames: the old path (`path` is the new one). `local`/`remote` describe the file under
+    /// its current name on each side, i.e. the old one on the side that is renamed.
+    pub from: Option<String>,
+    /// Conflicts: the name the local version gets (on both sides).
+    pub copy_name: Option<String>,
     pub selected: bool,
 }
 
@@ -111,6 +137,8 @@ pub struct Plan {
     pub in_sync: Vec<String>,
     pub local_files: usize,
     pub remote_files: usize,
+    /// No sync state yet (first two-way sync): "new" means "not on the other side".
+    pub first_sync: bool,
     pub warnings: Vec<String>,
 }
 
@@ -208,8 +236,9 @@ fn local_path(pair: &Pair, rel: &str) -> PathBuf {
     Path::new(&local_root(pair)).join(rel)
 }
 
-/// `dir/name.ext` -> `dir/name-<ts>-<side>.ext`
-pub fn conflict_name(path: &str, ts: &str, side: &str) -> String {
+/// `dir/name.ext` -> `dir/name (<who>'s conflicted copy <date>[ n]).ext` (like Dropbox).
+/// `n` > 1 is appended when the plain name is taken.
+pub fn conflict_name(path: &str, who: &str, date: &str, n: usize) -> String {
     let (dir, file) = match path.rfind('/') {
         Some(i) => (&path[..=i], &path[i + 1..]),
         None => ("", path),
@@ -218,7 +247,17 @@ pub fn conflict_name(path: &str, ts: &str, side: &str) -> String {
         Some(i) if i > 0 && i + 1 < file.len() => (&file[..i], &file[i..]),
         _ => (file, ""),
     };
-    format!("{dir}{stem}-{ts}-{side}{ext}")
+    let num = if n > 1 { format!(" {n}") } else { String::new() };
+    format!("{dir}{stem} ({who}'s conflicted copy {date}{num}){ext}")
+}
+
+/// Name of this computer for conflict copies: the host name without domain, without characters
+/// that are not allowed in file names.
+pub fn device_name() -> String {
+    let h = gethostname::gethostname().to_string_lossy().to_string();
+    let h = h.split('.').next().unwrap_or("").trim();
+    let h: String = h.chars().filter(|c| !r#"\/:*?"<>|'"#.contains(*c) && !c.is_control()).collect();
+    if h.is_empty() { "this computer".into() } else { h }
 }
 
 pub fn timestamp() -> String {
@@ -266,22 +305,13 @@ fn identical(rc: &Rclone, cfg: &Config, pair: &Pair, s: &Sides, st: &State, path
     Ok(same)
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Ch {
-    Absent,
-    New,
-    Unchanged,
-    Modified,
-    Deleted,
-}
-
-fn change(cur: Option<&Entry>, prev: Option<Entry>) -> Ch {
+fn change(cur: Option<&Entry>, prev: Option<Entry>) -> Change {
     match (cur, prev) {
-        (None, None) => Ch::Absent,
-        (Some(_), None) => Ch::New,
-        (None, Some(_)) => Ch::Deleted,
-        (Some(a), Some(b)) if *a == b => Ch::Unchanged,
-        _ => Ch::Modified,
+        (None, None) => Change::Absent,
+        (Some(_), None) => Change::New,
+        (None, Some(_)) => Change::Deleted,
+        (Some(a), Some(b)) if *a == b => Change::Unchanged,
+        _ => Change::Modified,
     }
 }
 
@@ -328,13 +358,20 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
     let mut items = Vec::new();
     let mut in_sync = Vec::new();
     let all: BTreeSet<&String> = s.local.keys().chain(s.remote.keys()).chain(st.files.keys()).collect();
-    let item = |path: &str, action, reason: &str| Item {
-        path: path.to_string(),
-        action,
-        reason: reason.to_string(),
-        local: s.local.get(path).copied(),
-        remote: s.remote.get(path).copied(),
-        selected: true,
+    let item = |path: &str, action, reason: &str| {
+        let prev = st.files.get(path);
+        Item {
+            path: path.to_string(),
+            action,
+            reason: reason.to_string(),
+            local: s.local.get(path).copied(),
+            remote: s.remote.get(path).copied(),
+            local_change: change(s.local.get(path), prev.and_then(|e| e.l)),
+            remote_change: change(s.remote.get(path), prev.and_then(|e| e.r)),
+            from: None,
+            copy_name: None,
+            selected: true,
+        }
     };
 
     if mode != Mode::TwoWay {
@@ -373,8 +410,8 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
             let prev = st.files.get(p);
             let lc = change(s.local.get(p), prev.and_then(|e| e.l));
             let rc_ = change(s.remote.get(p), prev.and_then(|e| e.r));
-            use Ch::*;
-            let lr = |c: Ch, side: &str| match c {
+            use Change::*;
+            let lr = |c: Change, side: &str| match c {
                 New => format!("{side} new"),
                 Modified => format!("{side} changed"),
                 Deleted => format!("{side} deleted"),
@@ -401,13 +438,22 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
         }
         let paths: Vec<String> = both_changed.iter().map(|b| b.0.clone()).collect();
         let same = identical(&rc, cfg, pair, &s, &st, &paths)?;
+        let (who, date) = (device_name(), chrono::Local::now().format("%Y-%m-%d").to_string());
+        let mut taken: HashSet<String> = s.local.keys().chain(s.remote.keys()).cloned().collect();
         for (p, lc, rc_) in both_changed {
             if same.contains(&p) {
                 in_sync.push(p);
             } else {
-                let what = |c| if c == Ch::New { "new" } else { "changed" };
-                items.push(item(&p, Action::Conflict, &format!("local {} and remote {}", what(lc), what(rc_))));
+                let what = |c| if c == Change::New { "new" } else { "changed" };
+                let mut it = item(&p, Action::Conflict, &format!("local {} and remote {}", what(lc), what(rc_)));
+                let copy = (1..).map(|n| conflict_name(&p, &who, &date, n)).find(|n| !taken.contains(n)).unwrap();
+                taken.insert(copy.clone());
+                it.copy_name = Some(copy);
+                items.push(it);
             }
+        }
+        if let Err(e) = detect_renames(&rc, pair, &mut items) {
+            log::warn(format!("[{}] Rename detection skipped: {e:#}", pair.label()));
         }
     }
 
@@ -434,8 +480,81 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
         in_sync,
         local_files: s.local.len(),
         remote_files: s.remote.len(),
+        first_sync: st.files.is_empty(),
         warnings,
     })
+}
+
+/// Turns "deleted on one side" + "new on the same side" with the same content into one rename,
+/// which is then repeated on the other side instead of deleting there and copying the file again.
+/// Only unambiguous cases: exactly one deleted and one new file of that size, with equal hashes.
+fn detect_renames(rc: &Rclone, pair: &Pair, items: &mut Vec<Item>) -> Result<()> {
+    for in_cloud in [true, false] {
+        let (del, new, rename) = if in_cloud {
+            (Action::DeleteLocal, Action::CopyToLocal, Action::RenameLocal)
+        } else {
+            (Action::DeleteRemote, Action::CopyToRemote, Action::RenameRemote)
+        };
+        // The old name still exists on the unchanged side, the new one only on the changed side.
+        let unchanged_side = |i: &Item| if in_cloud { i.local } else { i.remote };
+        let changed_side = |i: &Item| if in_cloud { i.remote } else { i.local };
+        let is_new = |i: &Item| {
+            let (u, c) = if in_cloud { (i.local_change, i.remote_change) } else { (i.remote_change, i.local_change) };
+            i.action == new && u == Change::Absent && c == Change::New
+        };
+        let mut by_size: BTreeMap<i64, (Vec<usize>, Vec<usize>)> = BTreeMap::new();
+        for (k, i) in items.iter().enumerate() {
+            if i.action == del && let Some(e) = unchanged_side(i) {
+                by_size.entry(e.size).or_default().0.push(k);
+            } else if is_new(i) && let Some(e) = changed_side(i) {
+                by_size.entry(e.size).or_default().1.push(k);
+            }
+        }
+        let cands: Vec<(usize, usize)> =
+            by_size.values().filter(|(o, n)| o.len() == 1 && n.len() == 1).map(|(o, n)| (o[0], n[0])).collect();
+        if cands.is_empty() {
+            continue;
+        }
+        let olds: Vec<String> = cands.iter().map(|c| items[c.0].path.clone()).collect();
+        let news: Vec<String> = cands.iter().map(|c| items[c.1].path.clone()).collect();
+        let (remote_paths, local_paths) = if in_cloud { (&news, &olds) } else { (&olds, &news) };
+        // The cloud decides the hash type (it can only report its own), the local side computes it.
+        let rh = rc.hashes(&pair.remote, remote_paths, None)?;
+        let ty = rh
+            .values()
+            .next()
+            .and_then(|h| {
+                ["md5", "sha1"].iter().map(|t| t.to_string()).find(|t| h.contains_key(t)).or_else(|| h.keys().min().cloned())
+            })
+            .context("the cloud reports no hash")?;
+        let lh = rc.hashes(&local_root(pair), local_paths, Some(&ty))?;
+        let hash = |m: &HashMap<String, HashMap<String, String>>, p: &str| m.get(p).and_then(|h| h.get(&ty)).cloned();
+        let mut remove = HashSet::new();
+        for (o, n) in cands {
+            let (op, np) = (items[o].path.clone(), items[n].path.clone());
+            let (ho, hn) = if in_cloud { (hash(&lh, &op), hash(&rh, &np)) } else { (hash(&rh, &op), hash(&lh, &np)) };
+            if ho.is_none() || ho != hn {
+                continue;
+            }
+            let old = items[o].clone();
+            let it = &mut items[n];
+            it.action = rename;
+            it.reason = format!("renamed {}", if in_cloud { "in the cloud" } else { "on this computer" });
+            if in_cloud {
+                it.local = old.local;
+            } else {
+                it.remote = old.remote;
+            }
+            it.from = Some(op);
+            remove.insert(o);
+        }
+        let mut k = 0;
+        items.retain(|_| {
+            k += 1;
+            !remove.contains(&(k - 1))
+        });
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- execution
@@ -444,15 +563,15 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
 pub struct Report {
     pub done: usize,
     pub failed: Vec<String>,
-    /// (original path, local conflict file, remote conflict file)
-    pub conflicts: Vec<(String, String, String)>,
+    /// (path, conflicted copy): the path holds the cloud version, the copy the local version.
+    pub conflicts: Vec<(String, String)>,
 }
 
 impl Report {
     pub fn summary(&self) -> String {
         let mut s = format!("{} actions applied", self.done);
         if !self.conflicts.is_empty() {
-            s += &format!(", {} conflicts (conflict files created)", self.conflicts.len());
+            s += &format!(", {} conflicts (conflicted copies created)", self.conflicts.len());
         }
         if !self.failed.is_empty() {
             s += &format!(", {} failed", self.failed.len());
@@ -486,6 +605,9 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
 
     let rc = Rclone::new(cfg)?;
     let ts = timestamp();
+    let mut selected = selected;
+    // Renames first: a conflicted copy or download must not take a name that is renamed away.
+    selected.sort_by_key(|i| !matches!(i.action, Action::RenameLocal | Action::RenameRemote));
     let lroot = local_root(pair);
     let mut report = Report::default();
     let mut touched: Vec<String> = Vec::new();
@@ -551,34 +673,54 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
                     Err(e) => fail(&mut report, p, e.to_string()),
                 }
             }
-            Action::Conflict => {
-                let exists = |n: &str| local_path(pair, n).exists() || fresh_has_remote(&fresh, n);
-                let mut ln = conflict_name(p, &ts, "local");
-                let mut rn = conflict_name(p, &ts, "remote");
-                let mut k = 2;
-                while exists(&ln) || exists(&rn) {
-                    ln = conflict_name(p, &format!("{ts}-{k}"), "local");
-                    rn = conflict_name(p, &format!("{ts}-{k}"), "remote");
-                    k += 1;
-                }
-                if let Err(e) = std::fs::rename(local_path(pair, p), local_path(pair, &ln)) {
-                    fail(&mut report, p, format!("Conflict: renaming local failed: {e}"));
+            Action::RenameLocal | Action::RenameRemote => {
+                let from = it.from.as_deref().unwrap_or_default();
+                let local = it.action == Action::RenameLocal;
+                let taken = if local { local_path(pair, p).exists() } else { fresh_has_remote(&fresh, p) };
+                if taken {
+                    fail(&mut report, p, format!("Renaming {from} failed: {p} already exists"));
                     continue;
                 }
-                let args = vec!["moveto".into(), join(&pair.remote, p), join(&pair.remote, &rn)];
-                match rc.run_logged(&args, &mut |_| {}) {
-                    Ok(true) => {
-                        log::warn(format!("[{label}] conflict {p} -> {ln} + {rn}"));
-                        to_remote.push(ln.clone());
-                        to_local.push(rn.clone());
-                        touched.extend([p.to_string(), ln.clone(), rn.clone()]);
-                        report.conflicts.push((p.to_string(), ln, rn));
+                let r = if local {
+                    let dst = local_path(pair, p);
+                    dst.parent()
+                        .map_or(Ok(()), std::fs::create_dir_all)
+                        .and_then(|_| std::fs::rename(local_path(pair, from), &dst))
+                        .map_err(|e| e.to_string())
+                } else {
+                    let args = vec!["moveto".into(), join(&pair.remote, from), join(&pair.remote, p)];
+                    match rc.run_logged(&args, &mut |_| {}) {
+                        Ok(true) => Ok(()),
+                        Ok(false) => Err("rclone moveto failed".into()),
+                        Err(e) => Err(e.to_string()),
                     }
-                    _ => {
-                        let _ = std::fs::rename(local_path(pair, &ln), local_path(pair, p));
-                        fail(&mut report, p, "Conflict: renaming remote failed".into());
+                };
+                match r {
+                    Ok(()) => {
+                        log::info(format!("[{label}] renamed {}: {from} -> {p}", if local { "local" } else { "remote" }));
+                        report.done += 1;
+                        touched.extend([from.to_string(), p.to_string()]);
                     }
+                    Err(e) => fail(&mut report, p, format!("Renaming {from} failed: {e}")),
                 }
+            }
+            Action::Conflict => {
+                // The cloud version keeps the name; the local version is kept as a conflicted
+                // copy (uploaded too), then the cloud version is downloaded under the name.
+                let Some(copy) = it.copy_name.clone() else { continue };
+                if local_path(pair, &copy).exists() || fresh_has_remote(&fresh, &copy) {
+                    fail(&mut report, p, format!("Conflict: {copy} already exists"));
+                    continue;
+                }
+                if let Err(e) = std::fs::rename(local_path(pair, p), local_path(pair, &copy)) {
+                    fail(&mut report, p, format!("Conflict: renaming the local version failed: {e}"));
+                    continue;
+                }
+                log::warn(format!("[{label}] conflict {p}: local version kept as {copy}"));
+                to_remote.push(copy.clone());
+                to_local.push(p.into());
+                touched.extend([p.to_string(), copy.clone()]);
+                report.conflicts.push((p.to_string(), copy));
             }
             _ => {}
         }
@@ -618,7 +760,7 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
             } else {
                 st.files.insert(p.clone(), StateEntry { l, r });
             }
-            if copied.contains(p) && !report.conflicts.iter().any(|c| &c.1 == p || &c.2 == p) {
+            if copied.contains(p) && !report.conflicts.iter().any(|c| &c.0 == p || &c.1 == p) {
                 report.done += 1;
             }
         } else if touched.contains(p) && !report.failed.iter().any(|f| f.starts_with(&format!("{p}:"))) {
@@ -697,11 +839,12 @@ mod tests {
     use super::*;
     #[test]
     fn conflict_names() {
-        let ts = "2026-11-21T10-15-30Z";
-        assert_eq!(conflict_name("a/rechnung.pdf", ts, "local"), "a/rechnung-2026-11-21T10-15-30Z-local.pdf");
-        assert_eq!(conflict_name("Makefile", ts, "remote"), "Makefile-2026-11-21T10-15-30Z-remote");
-        assert_eq!(conflict_name("x/.bashrc", ts, "local"), "x/.bashrc-2026-11-21T10-15-30Z-local");
-        assert_eq!(conflict_name("a.tar.gz", ts, "local"), "a.tar-2026-11-21T10-15-30Z-local.gz");
+        let (w, d) = ("laptop", "2026-11-22");
+        assert_eq!(conflict_name("a/plan.txt", w, d, 1), "a/plan (laptop's conflicted copy 2026-11-22).txt");
+        assert_eq!(conflict_name("plan.txt", w, d, 2), "plan (laptop's conflicted copy 2026-11-22 2).txt");
+        assert_eq!(conflict_name("Makefile", w, d, 1), "Makefile (laptop's conflicted copy 2026-11-22)");
+        assert_eq!(conflict_name("x/.bashrc", w, d, 1), "x/.bashrc (laptop's conflicted copy 2026-11-22)");
+        assert_eq!(conflict_name("a.tar.gz", w, d, 1), "a.tar (laptop's conflicted copy 2026-11-22).gz");
     }
 
     /// End-to-end test with the real rclone binary; the "remote" is a second local folder.
@@ -762,16 +905,14 @@ mod tests {
                 ("sub/c.txt".into(), Action::CopyToRemote)
             ]
         );
+        let copy = p.items.iter().find(|i| i.action == Action::Conflict).unwrap().copy_name.clone().unwrap();
+        assert!(copy.starts_with("b (") && copy.contains("'s conflicted copy ") && copy.ends_with(").txt"), "{copy}");
         let rep = execute(&cfg, &p, &mut |_| {}).unwrap();
         assert!(rep.failed.is_empty(), "{:?}", rep.failed);
-        assert_eq!(rep.conflicts.len(), 1);
-        let (_, ln, rn) = rep.conflicts[0].clone();
-        assert!(ln.starts_with("b-") && ln.ends_with("Z-local.txt"), "{ln}");
-        assert!(rn.ends_with("Z-remote.txt"), "{rn}");
+        assert_eq!(rep.conflicts, vec![("b.txt".to_string(), copy.clone())]);
         for root in [&l, &r] {
-            assert!(!has(root, "b.txt"));
-            assert_eq!(fs::read_to_string(root.join(&ln)).unwrap(), "bb-local");
-            assert_eq!(fs::read_to_string(root.join(&rn)).unwrap(), "bb-remot");
+            assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "bb-remot", "cloud version keeps the name");
+            assert_eq!(fs::read_to_string(root.join(&copy)).unwrap(), "bb-local", "local version kept as copy");
             for f in ["a.txt", "d.txt", "sub/c.txt"] {
                 assert!(has(root, f), "{f} missing in {}", root.display());
             }
@@ -818,7 +959,24 @@ mod tests {
         let p = plan(&cfg, &pair, Mode::Pull).unwrap();
         assert_eq!(acts(&p), vec![("only-local.txt".into(), Action::DeleteLocal)]);
 
-        // 6. Safety: emptied remote is never treated as "delete everything".
+        // 6. Renames are repeated on the other side instead of delete + copy.
+        let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();
+        execute(&cfg, &p, &mut |_| {}).unwrap();
+        fs::rename(r.join("sub/c.txt"), r.join("sub/c-renamed.txt")).unwrap();
+        fs::rename(l.join("e.txt"), l.join("e2.txt")).unwrap();
+        let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();
+        assert_eq!(
+            acts(&p),
+            vec![("e2.txt".into(), Action::RenameRemote), ("sub/c-renamed.txt".into(), Action::RenameLocal)]
+        );
+        assert_eq!(p.items[1].from.as_deref(), Some("sub/c.txt"));
+        let rep = execute(&cfg, &p, &mut |_| {}).unwrap();
+        assert!(rep.failed.is_empty(), "{:?}", rep.failed);
+        assert!(has(&l, "sub/c-renamed.txt") && !has(&l, "sub/c.txt"));
+        assert!(has(&r, "e2.txt") && !has(&r, "e.txt"));
+        assert!(plan(&cfg, &pair, Mode::TwoWay).unwrap().items.is_empty(), "in sync after renames");
+
+        // 7. Safety: emptied remote is never treated as "delete everything".
         let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();
         execute(&cfg, &p, &mut |_| {}).unwrap();
         fs::remove_dir_all(&r).unwrap();

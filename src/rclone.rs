@@ -320,6 +320,57 @@ impl Rclone {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct LsHash {
+    path: String,
+    #[serde(default)]
+    hashes: HashMap<String, String>,
+}
+
+impl Rclone {
+    /// Hashes of the given files (relative to `root`): path -> (hash type -> value).
+    /// Without `hash_type` the backend reports the types it supports natively.
+    pub fn hashes(
+        &self,
+        root: &str,
+        paths: &[String],
+        hash_type: Option<&str>,
+    ) -> Result<HashMap<String, HashMap<String, String>>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let list = tmp_file("hash-list", &paths.join("\n"))?;
+        let mut args: Vec<String> = ["lsjson", "-R", "--files-only", "--no-mimetype", "--hash", "--files-from-raw"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        args.push(list.display().to_string());
+        args.push(root.into());
+        if let Some(t) = hash_type {
+            args.push("--hash-type".into());
+            args.push(t.into());
+        }
+        let res = self.run(&args);
+        let _ = std::fs::remove_file(&list);
+        let (ok, out, err) = res?;
+        if !ok {
+            bail!("Hashing in {root} failed:\n{}", err.trim());
+        }
+        let items: Vec<LsHash> = serde_json::from_str(&out).context("reading lsjson output")?;
+        Ok(items.into_iter().map(|i| (i.path, i.hashes)).collect())
+    }
+
+    /// Up to `max` bytes of a file (`None` if it is larger than that).
+    pub fn cat(&self, path: &str, max: u64) -> Result<Option<String>> {
+        let (ok, out, err) = self.run(&["cat".into(), "--count".into(), (max + 1).to_string(), path.into()])?;
+        if !ok {
+            bail!("Reading {path} failed:\n{}", err.trim());
+        }
+        Ok((out.len() as u64 <= max).then_some(out))
+    }
+}
+
 /// Go template rclone renders after the OAuth redirect (fields: .OK, .Name, .Description, .Code, .HelpURL).
 const AUTH_PAGE: &str = include_str!("../assets/auth_page.html");
 
