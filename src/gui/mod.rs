@@ -100,7 +100,14 @@ struct App {
     delete_pair: Option<usize>,
     logo: egui::TextureHandle,
     flash: Option<(String, Instant)>,
+    /// Pairs whose two-way sync is being checked inline on the overview (no preview screen).
+    syncing: Vec<String>,
+    /// Pairs that turned out to be in sync, with the time (note fades out on the overview).
+    in_sync: Option<(Vec<String>, Instant)>,
 }
+
+/// How long the “Everything in sync” note stays on a card (the last second fades out).
+const IN_SYNC_NOTE: Duration = Duration::from_secs(4);
 
 pub fn run(action: Option<Mode>) -> anyhow::Result<()> {
     let Some(_lock) = ipc::try_lock("window.lock") else {
@@ -215,6 +222,8 @@ impl App {
             delete_pair: None,
             logo,
             flash: None,
+            syncing: Vec::new(),
+            in_sync: None,
         };
         app.load_rinfo(&cc.egui_ctx);
         #[cfg(debug_assertions)]
@@ -287,6 +296,8 @@ impl App {
         self.only = None;
         self.show_same = false;
         self.diffs.clear();
+        self.in_sync = None;
+        self.syncing = if mode == Mode::TwoWay { pairs.iter().map(|p| p.id.clone()).collect() } else { Vec::new() };
         if pairs.is_empty() {
             self.job = Job::Review(mode, vec![Err("No active folder pair. Add one in the overview.".into())]);
             return;
@@ -330,6 +341,7 @@ impl App {
         // The worker thread finishes on its own within ~100 ms; its result is ignored.
         self.plans_job = None;
         self.job = Job::None;
+        self.syncing.clear();
         log::info("Comparison cancelled");
         self.flash("Comparison cancelled");
     }
@@ -378,7 +390,20 @@ impl App {
                 if std::env::var("DRAISINE_DEBUG_CONFIRM").is_ok() {
                     self.confirm = true;
                 }
-                self.job = Job::Review(m, plans);
+                let ids = std::mem::take(&mut self.syncing);
+                let nothing_to_do = m == Mode::TwoWay
+                    && plans.iter().all(|p| p.as_ref().is_ok_and(|p| p.count(|i| i.action.executable()) == 0));
+                if nothing_to_do {
+                    // No preview screen: just a short note on the overview cards.
+                    self.job = Job::None;
+                    self.in_sync = Some((ids, Instant::now()));
+                } else {
+                    self.job = Job::Review(m, plans);
+                }
+                #[cfg(debug_assertions)]
+                if std::env::var("DRAISINE_DEBUG_VIEW").as_deref() == Ok("result") {
+                    self.view = preview::View::Result;
+                }
             }
         if let Some(j) = &mut self.exec_job
             && let Some(r) = j.poll() {
@@ -480,6 +505,8 @@ impl App {
     fn overview(&mut self, ui: &mut Ui) {
         let p = pal(ui);
         match &self.job {
+            // A two-way sync is checked inline: the overview stays, the cards show a spinner.
+            Job::Planning(Mode::TwoWay) => {}
             Job::Planning(m) => {
                 theme::page_header(ui, mode_title(*m), "");
                 theme::card(ui, |ui| {
@@ -538,7 +565,22 @@ impl App {
             return;
         }
         let ctx = ui.ctx().clone();
-        let any_enabled = self.cfg.pairs.iter().any(|p| p.enabled);
+        let busy = self.busy();
+        let any_enabled = self.cfg.pairs.iter().any(|p| p.enabled) && !busy;
+        let syncing = self.syncing.clone();
+        let in_sync_alpha = match &self.in_sync {
+            Some((_, t)) if t.elapsed() < IN_SYNC_NOTE => {
+                ctx.request_repaint();
+                (IN_SYNC_NOTE - t.elapsed()).as_secs_f32().min(1.0)
+            }
+            Some(_) => {
+                self.in_sync = None;
+                0.0
+            }
+            None => 0.0,
+        };
+        let in_sync_ids = self.in_sync.as_ref().map(|x| x.0.clone()).unwrap_or_default();
+        let mut cancel_sync = false;
         ui.horizontal(|ui| {
             if theme::primary_enabled(ui, any_enabled, "↔  Sync all").clicked() {
                 self.start_plan(&ctx, Mode::TwoWay, None);
@@ -631,8 +673,33 @@ impl App {
                         None => ui.label(RichText::new("🕓  Never synced").size(13.0).color(p.orange)),
                     };
                     ui.add_space(4.0);
-                    if theme::primary(ui, "↔  Sync").on_hover_text("Two-way sync: take over changes from both sides").clicked() {
-                        action = Some((Mode::TwoWay, pair.id.clone()));
+                    if syncing.contains(&pair.id) {
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(34.0);
+                            ui.spinner();
+                            ui.label(theme::bold("Syncing …", 14.5))
+                                .on_hover_text("Comparing this computer with the cloud. Nothing is changed yet.");
+                            ui.add_space(6.0);
+                            if theme::link(ui, "Cancel").clicked() {
+                                cancel_sync = true;
+                            }
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
+                            if theme::primary_enabled(ui, !busy, "↔  Sync")
+                                .on_hover_text("Two-way sync: take over changes from both sides")
+                                .clicked()
+                            {
+                                action = Some((Mode::TwoWay, pair.id.clone()));
+                            }
+                            if in_sync_alpha > 0.0 && in_sync_ids.contains(&pair.id) {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    theme::bold("✔  Everything in sync, nothing to do.", 14.0)
+                                        .color(p.green.gamma_multiply(in_sync_alpha)),
+                                );
+                            }
+                        });
                     }
                 });
                 ui.add_space(4.0);
@@ -640,6 +707,9 @@ impl App {
         });
         if toggled {
             self.save();
+        }
+        if cancel_sync {
+            self.cancel_plan();
         }
         if let Some(i) = start_edit {
             let d = self.cfg.pairs[i].clone();
@@ -663,7 +733,9 @@ impl App {
             engine::reset_state(&self.cfg.pairs[i]);
             self.flash("Sync state reset");
         }
-        if let Some((m, id)) = action {
+        if let Some((m, id)) = action
+            && !busy
+        {
             self.start_plan(&ctx, m, Some(vec![id]));
         }
     }
