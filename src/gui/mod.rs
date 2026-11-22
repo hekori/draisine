@@ -625,6 +625,7 @@ impl App {
             _ => Vec::new(),
         };
         let cfg_snapshot = self.cfg.clone();
+        let next_checks = ipc::next_checks();
         let mut action: Option<(Mode, String)> = None;
         let (mut toggled, mut save_edit, mut cancel_edit) = (false, false, false);
         let (mut start_edit, mut reset) = (None, None);
@@ -642,8 +643,8 @@ impl App {
                             ui.menu_button(RichText::new("•••").size(13.0), |ui| {
                                 for (m, label, hint) in [
                                     (Mode::Diff, "🔍  Compare", "Only show differences, change nothing"),
-                                    (Mode::Pull, "⬇  Cloud ➡ this computer", "One-way: this computer becomes a mirror of the cloud"),
-                                    (Mode::Push, "⬆  This computer ➡ cloud", "One-way: the cloud becomes a mirror of this computer"),
+                                    (Mode::Pull, "Sync cloud ➡ this computer", "One-way: this computer becomes a mirror of the cloud"),
+                                    (Mode::Push, "Sync this computer ➡ cloud", "One-way: the cloud becomes a mirror of this computer"),
                                 ] {
                                     if ui.button(label).on_hover_text(hint).clicked() {
                                         action = Some((m, id.clone()));
@@ -687,6 +688,15 @@ impl App {
                         Some(t) => ui.label(RichText::new(format!("🕓  Last synced {t}  ·  {}", st.last_result)).size(13.0)),
                         None => ui.label(RichText::new("🕓  Never synced").size(13.0).color(p.orange)),
                     };
+                    let next = next_checks.get(&pair.id).filter(|_| pair.auto_sync).map(|&t| next_check_text(t));
+                    if st.last_check.is_some() || next.is_some() {
+                        let last = st.last_check.as_ref().map(|c| format!("Last checked {c}"));
+                        let text = [last, next].into_iter().flatten().collect::<Vec<_>>().join("  ·  ");
+                        ui.label(theme::muted(ui, format!("🔍  {text}")).small()).on_hover_text(
+                            "When local and remote were last compared (preview, auto-sync check or sync), \
+                             and when auto-sync compares them next.",
+                        );
+                    }
                     let waiting = st.pending.total();
                     if waiting > 0 && !syncing.contains(&pair.id) {
                         ui.add_space(4.0);
@@ -734,8 +744,9 @@ impl App {
                             // Auto-sync is offered only once the pair has been synced by hand.
                             if synced {
                                 ui.add_space(16.0);
-                                let hint = "Two-way sync in the background. Deletes and overwrites are applied when only one side changed \
-                                            since the last sync; anything unclear waits for you.";
+                                let hint = "Hands-free two-way sync in the background: new, changed and deleted files are taken over \
+                                            on their own whenever it is clear which side changed since the last sync. \
+                                            Anything unclear waits for your OK.";
                                 let r = ui.add_enabled_ui(!busy, |ui| theme::toggle(ui, &mut pair.auto_sync)).inner;
                                 if r.on_hover_text(hint).changed() {
                                     log::info(format!("[{}] Auto-sync {}", pair.label(), if pair.auto_sync { "on" } else { "off" }));
@@ -763,6 +774,10 @@ impl App {
                                 );
                             }
                         });
+                        if synced && pair.auto_sync {
+                            ui.add_space(2.0);
+                            ui.label(theme::muted(ui, auto_sync_note(pair)).small());
+                        }
                     }
                 });
                 ui.add_space(4.0);
@@ -1540,4 +1555,28 @@ impl eframe::App for App {
         }
         let _ = CursorIcon::Default;
     }
+}
+
+/// "next check in 4:32", "next check in 1 h 05 min", "next check due now".
+fn next_check_text(at: u64) -> String {
+    let left = at.saturating_sub(ipc::unix_now());
+    match left {
+        0 => "next check due now".into(),
+        s if s >= 3600 => format!("next check in {} h {:02} min", s / 3600, s % 3600 / 60),
+        s => format!("next check in {}:{:02}", s / 60, s % 60),
+    }
+}
+
+/// Shown while auto-sync is on: it changes and deletes files without asking, and how that is
+/// kept safe.
+fn auto_sync_note(pair: &Pair) -> String {
+    let safety = if pair.remote_backup.trim().is_empty() {
+        "Replaced or deleted local files go to the trash. Tip: set a backup folder (Edit) to keep old cloud versions too."
+    } else {
+        "Replaced or deleted files are kept: local ones in the trash, cloud ones in the backup folder."
+    };
+    format!(
+        "✨  Auto-sync works for you: it copies, updates and deletes files on both sides on its own, \
+         whenever it is clear which side changed. {safety} Anything unclear waits for your OK."
+    )
 }

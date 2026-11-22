@@ -255,12 +255,33 @@ fn classify(msg: &str) -> ErrorKind {
     }
 }
 
+/// Tells the window when each auto-sync pair is checked next (for its countdown). Paused: none.
+/// Writes only when something changed.
+fn publish_schedule(cfg: &Config, auto_ids: &[String], last_run: &HashMap<String, (Instant, u64)>, written: &mut String) {
+    let next: HashMap<String, u64> = if cfg.auto_sync_paused {
+        HashMap::new()
+    } else {
+        cfg.pairs
+            .iter()
+            .filter(|p| auto_ids.contains(&p.id))
+            .map(|p| (p.id.clone(), last_run.get(&p.id).map_or(0, |t| t.1 + p.interval_minutes.max(1) as u64 * 60)))
+            .collect()
+    };
+    let s = ipc::format_schedule(&next);
+    if s != *written {
+        ipc::write_schedule(&s);
+        *written = s;
+    }
+}
+
 fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: EventLoopProxy<UserEvent>) {
     let mut cfg = Config::load();
     let mut auto_ids = auto_pairs(&cfg);
     let mut mtime = Config::mtime();
-    // Per pair: when auto-sync last ran it. Missing: due right away.
-    let mut last_run: HashMap<String, Instant> = HashMap::new();
+    // Per pair: when auto-sync last ran it (monotonic, and as Unix seconds for the window's
+    // countdown). Missing: due right away.
+    let mut last_run: HashMap<String, (Instant, u64)> = HashMap::new();
+    let mut schedule = String::new();
     let mut last_note = String::new();
     let mut window_busy = false;
     let mut before_window: Option<(Status, String)> = None;
@@ -344,6 +365,7 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
                 let _ = proxy.send_event(UserEvent::Refresh);
             }
         }
+        publish_schedule(&cfg, &auto_ids, &last_run, &mut schedule);
         // “Run auto-sync now” runs every auto-sync pair, even while paused.
         let pairs: Vec<_> = cfg
             .pairs
@@ -351,7 +373,7 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
             .filter(|p| auto_ids.contains(&p.id))
             .filter(|p| {
                 let interval = Duration::from_secs(p.interval_minutes.max(1) as u64 * 60);
-                force || (!cfg.auto_sync_paused && last_run.get(&p.id).is_none_or(|t| t.elapsed() >= interval))
+                force || (!cfg.auto_sync_paused && last_run.get(&p.id).is_none_or(|t| t.0.elapsed() >= interval))
             })
             .cloned()
             .collect();
@@ -363,8 +385,9 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
             continue;
         }
         for p in &pairs {
-            last_run.insert(p.id.clone(), Instant::now());
+            last_run.insert(p.id.clone(), (Instant::now(), ipc::unix_now()));
         }
+        publish_schedule(&cfg, &auto_ids, &last_run, &mut schedule);
         set(&shared, &proxy, Status::Busy, "Auto-sync running …".into());
         log::info("Auto-sync started");
         let (mut pending, mut conflicts, mut done, mut errors) = (0, 0, 0, Vec::new());

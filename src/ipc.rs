@@ -139,3 +139,36 @@ pub fn take_tray_note() -> Option<TrayNote> {
         _ => TrayNote::Changed,
     })
 }
+
+/// Seconds since the Unix epoch.
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// One `id<TAB>unix seconds` line per pair, sorted (0: due right away).
+pub fn format_schedule(next: &std::collections::HashMap<String, u64>) -> String {
+    let mut lines: Vec<String> = next.iter().map(|(id, t)| format!("{id}\t{t}")).collect();
+    lines.sort();
+    lines.join("\n")
+}
+
+/// Tray side: publishes when each auto-sync pair is checked next.
+pub fn write_schedule(s: &str) {
+    let _ = std::fs::write(path("next-checks.txt"), s);
+}
+
+/// Window side: when the tray checks each pair next (Unix seconds, 0: due now). Empty when the
+/// tray is not running, since then nothing is scheduled.
+pub fn next_checks() -> std::collections::HashMap<String, u64> {
+    if !is_locked("tray.lock") {
+        return Default::default();
+    }
+    std::fs::read_to_string(path("next-checks.txt"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (id, t) = l.split_once('\t')?;
+            Some((id.to_string(), t.trim().parse().ok()?))
+        })
+        .collect()
+}

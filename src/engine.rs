@@ -162,6 +162,9 @@ pub struct State {
     pub files: BTreeMap<String, StateEntry>,
     pub last_sync: Option<String>,
     pub last_result: String,
+    /// When local and remote were last compared (any preview, auto-sync check or sync).
+    #[serde(default)]
+    pub last_check: Option<String>,
     /// Deletes and overwrites the last two-way run found but did not apply.
     #[serde(default)]
     pub pending: Pending,
@@ -217,20 +220,22 @@ fn waiting<'a>(cfg: &Config, pair: &Pair, st: &State, items: impl Iterator<Item 
     Pending::of(items.filter(|i| !(auto && auto_safe(i, st))))
 }
 
-/// Remembers what a two-way plan would delete or overwrite, so the overview and the tray can
-/// point the user to it. Other modes say nothing about two-way and leave it alone.
+/// Records that the pair was just checked, and remembers what a two-way plan would delete or
+/// overwrite, so the overview and the tray can point the user to it. Other modes say nothing
+/// about two-way and leave the pending note alone.
 pub fn record_pending(cfg: &Config, plan: &Plan) {
-    if plan.mode != Mode::TwoWay {
-        return;
-    }
     let mut st = load_state(&plan.pair);
-    let p = waiting(cfg, &plan.pair, &st, plan.items.iter());
-    if st.pending != p {
-        st.pending = p;
-        if let Err(e) = save_state(&plan.pair, &st) {
-            log::warn(format!("[{}] Saving the sync state failed: {e:#}", plan.pair.label()));
-        }
+    st.last_check = Some(now_stamp());
+    if plan.mode == Mode::TwoWay {
+        st.pending = waiting(cfg, &plan.pair, &st, plan.items.iter());
     }
+    if let Err(e) = save_state(&plan.pair, &st) {
+        log::warn(format!("[{}] Saving the sync state failed: {e:#}", plan.pair.label()));
+    }
+}
+
+fn now_stamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 fn state_path(pair: &Pair) -> PathBuf {
@@ -851,7 +856,8 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
         }
     }
     report.done += report.conflicts.len();
-    st.last_sync = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    st.last_sync = Some(now_stamp());
+    st.last_check = st.last_sync.clone();
     st.last_result = format!("{}: {}", planned.mode.label(), report.summary());
     // What is still waiting: two-way deletes/overwrites that were not selected. A one-way sync
     // changes the baseline, so the next two-way run will tell.
