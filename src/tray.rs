@@ -40,6 +40,9 @@ struct Shared {
     status: Status,
     text: String,
     paused: bool,
+    /// Deletes/overwrites waiting for confirmation (all pairs): the status line becomes a
+    /// “Review …” entry.
+    waiting: usize,
 }
 
 struct Items {
@@ -72,7 +75,13 @@ fn tray_icon(status: Status) -> tray_icon::Icon {
 impl App {
     fn refresh(&mut self) {
         let sh = self.shared.lock().unwrap().clone();
-        self.items.status.set_text(&sh.text);
+        if sh.waiting > 0 && sh.status != Status::Busy {
+            self.items.status.set_text(format!("⚠ Review {} …", engine::changes(sh.waiting)));
+            self.items.status.set_enabled(true);
+        } else {
+            self.items.status.set_text(&sh.text);
+            self.items.status.set_enabled(false);
+        }
         self.items.pause.set_checked(sh.paused);
         if let Some(t) = &self.tray {
             let _ = t.set_icon(Some(tray_icon(sh.status)));
@@ -83,7 +92,9 @@ impl App {
     fn handle_menu(&mut self, ev: MenuEvent, token: Option<String>, el: &ActiveEventLoop) {
         let id = ev.id;
         let i = &self.items;
-        if id == *i.open.id() {
+        if id == *i.status.id() {
+            ipc::request_review(token);
+        } else if id == *i.open.id() {
             ipc::request_window(None, token);
         } else if id == *i.diff.id() {
             ipc::request_window(Some(Mode::Diff), token);
@@ -161,6 +172,12 @@ fn set(shared: &Arc<Mutex<Shared>>, proxy: &EventLoopProxy<UserEvent>, status: S
         s.text = text;
     }
     let _ = proxy.send_event(UserEvent::Refresh);
+}
+
+/// Counts what is waiting for confirmation, as last recorded per pair.
+fn update_waiting(cfg: &Config, shared: &Arc<Mutex<Shared>>) {
+    let n = cfg.pairs.iter().map(|p| engine::load_state(p).pending.total()).sum();
+    shared.lock().unwrap().waiting = n;
 }
 
 fn notify(body: &str) {
@@ -312,6 +329,7 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
                 cfg = new;
                 shared.lock().unwrap().paused = cfg.auto_sync_paused;
             }
+            update_waiting(&cfg, &shared);
             let ids = auto_pairs(&cfg);
             last_run.retain(|id, _| ids.contains(id)); // turning auto-sync on for a pair runs it right away
             auto_ids = ids;
@@ -381,8 +399,11 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
         } else if pending > 0 {
             (
                 Status::Attention,
-                format!("{pending} changes waiting for confirmation ({now})"),
-                format!("{pending} files are to be deleted or overwritten. Please confirm via “Two-way sync …” in the menu."),
+                format!("{} waiting for confirmation ({now})", engine::changes(pending)),
+                format!(
+                    "{} waiting: files to be deleted or overwritten. Choose “Review …” in the tray menu, or open Draisine.",
+                    engine::changes(pending)
+                ),
             )
         } else {
             let (_, t) = idle_status(&cfg);
@@ -398,6 +419,7 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
             notify(&note);
         }
         last_note = note;
+        update_waiting(&cfg, &shared);
         set(&shared, &proxy, status, text);
     }
 }
@@ -440,7 +462,8 @@ pub fn run() -> Result<()> {
 
     let cfg = Config::load();
     let (st, text) = idle_status(&cfg);
-    let shared = Arc::new(Mutex::new(Shared { status: st, text, paused: cfg.auto_sync_paused }));
+    let shared = Arc::new(Mutex::new(Shared { status: st, text, paused: cfg.auto_sync_paused, waiting: 0 }));
+    update_waiting(&cfg, &shared);
 
     let items = Items {
         status: MenuItem::new("", false, None),

@@ -32,6 +32,8 @@ pub struct WindowRequest {
     pub action: Option<Mode>,
     /// Tray icon click: minimize the window if it is in front, otherwise show it.
     pub toggle: bool,
+    /// Show the two-way preview of the pairs with changes waiting for confirmation.
+    pub review: bool,
     /// XDG activation token of the click that caused the request. On Wayland a window may only
     /// raise itself with such a token.
     pub token: Option<String>,
@@ -44,6 +46,11 @@ pub fn env_token() -> Option<String> {
 
 pub fn request_window(action: Option<Mode>, token: Option<String>) {
     send_request(action.map(|m| m.arg()).unwrap_or("show"), token);
+}
+
+/// Shows the window with the preview of everything auto-sync held back.
+pub fn request_review(token: Option<String>) {
+    send_request("review", token);
 }
 
 /// Tray icon click: shows the window, or minimizes it when it is in front.
@@ -86,7 +93,7 @@ pub fn take_request() -> Option<WindowRequest> {
     let mut lines = s.lines();
     let kind = lines.next().unwrap_or("").trim();
     let token = lines.next().map(str::trim).filter(|t| !t.is_empty()).map(String::from);
-    Some(WindowRequest { action: Mode::from_arg(kind), toggle: kind == "toggle", token })
+    Some(WindowRequest { action: Mode::from_arg(kind), toggle: kind == "toggle", review: kind == "review", token })
 }
 
 /// What the window tells the tray when it is done.

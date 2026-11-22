@@ -117,7 +117,10 @@ pub fn run(action: Option<Mode>) -> anyhow::Result<()> {
         ipc::request_window(action, ipc::env_token());
         return Ok(());
     };
-    let _ = ipc::take_request();
+    // Started by the tray: the request file says what to do (the command line only says --window).
+    let req = ipc::take_request();
+    let review = req.as_ref().is_some_and(|r| r.review);
+    let action = action.or(req.and_then(|r| r.action));
     let px = icon::rgba(64, icon::Status::Idle.color());
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -128,7 +131,7 @@ pub fn run(action: Option<Mode>) -> anyhow::Result<()> {
             .with_icon(egui::IconData { rgba: px, width: 64, height: 64 }),
         ..Default::default()
     };
-    eframe::run_native(APP_NAME, opts, Box::new(move |cc| Ok(Box::new(App::new(cc, action)))))
+    eframe::run_native(APP_NAME, opts, Box::new(move |cc| Ok(Box::new(App::new(cc, action, review)))))
         .map_err(|e| anyhow::anyhow!("Window: {e}"))
 }
 
@@ -199,7 +202,7 @@ fn mode_title(m: Mode) -> &'static str {
 // ------------------------------------------------------------------ app
 
 impl App {
-    fn new(cc: &eframe::CreationContext, action: Option<Mode>) -> App {
+    fn new(cc: &eframe::CreationContext, action: Option<Mode>, review: bool) -> App {
         theme::install(&cc.egui_ctx);
         let logo = cc.egui_ctx.load_texture(
             "logo",
@@ -257,10 +260,21 @@ impl App {
                 _ => Page::Overview,
             };
         }
-        if let Some(m) = action {
+        if review {
+            app.start_review(&cc.egui_ctx);
+        } else if let Some(m) = action {
             app.start_plan(&cc.egui_ctx, m, None);
         }
         app
+    }
+
+    /// Two-way preview of the pairs with deletes/overwrites waiting for confirmation.
+    fn start_review(&mut self, ctx: &egui::Context) {
+        let ids: Vec<String> =
+            self.cfg.pairs.iter().filter(|p| engine::load_state(p).pending.total() > 0).map(|p| p.id.clone()).collect();
+        if !ids.is_empty() {
+            self.start_plan(ctx, Mode::TwoWay, Some(ids));
+        }
     }
 
     fn busy(&self) -> bool {
@@ -336,6 +350,7 @@ impl App {
                 // First two-way sync of a pair that is already identical: nothing to apply, but the
                 // state must still be recorded, otherwise it counts as never synced (no auto-sync).
                 for p in plans.iter().flatten() {
+                    engine::record_pending(p); // keeps the overview's “waiting” note current
                     if mode == Mode::TwoWay
                         && p.count(|i| i.action.executable()) == 0
                         && !engine::has_synced(&p.pair)
@@ -462,6 +477,12 @@ impl App {
                 if let Some(m) = action {
                     self.start_plan(ctx, m, None);
                 }
+            }
+            Some(raise::Request::Review) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                self.start_review(ctx);
             }
             Some(raise::Request::Minimize) => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
             None => {}
@@ -660,12 +681,36 @@ impl App {
                     if !pair.remote_backup.is_empty() {
                         ui.label(theme::muted(ui, format!("Backup: {}", pair.remote_backup)).small());
                     }
-                    let (t, r) = engine::last_status(pair);
-                    let synced = t.is_some();
-                    match t {
-                        Some(t) => ui.label(RichText::new(format!("🕓  Last synced {t}  ·  {r}")).size(13.0)),
+                    let st = engine::load_state(pair);
+                    let synced = st.last_sync.is_some();
+                    match &st.last_sync {
+                        Some(t) => ui.label(RichText::new(format!("🕓  Last synced {t}  ·  {}", st.last_result)).size(13.0)),
                         None => ui.label(RichText::new("🕓  Never synced").size(13.0).color(p.orange)),
                     };
+                    let waiting = st.pending.total();
+                    if waiting > 0 && !syncing.contains(&pair.id) {
+                        ui.add_space(4.0);
+                        theme::callout(ui, p.orange, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "⚠  {} waiting for your confirmation ({})",
+                                        engine::changes(waiting),
+                                        st.pending.describe()
+                                    ))
+                                    .size(13.5),
+                                );
+                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if theme::secondary_enabled(ui, !busy, "Review …")
+                                        .on_hover_text("Show the two-way preview: nothing is changed until you confirm.")
+                                        .clicked()
+                                    {
+                                        action = Some((Mode::TwoWay, pair.id.clone()));
+                                    }
+                                });
+                            });
+                        });
+                    }
                     ui.add_space(4.0);
                     if syncing.contains(&pair.id) {
                         ui.horizontal(|ui| {

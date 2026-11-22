@@ -162,6 +162,68 @@ pub struct State {
     pub files: BTreeMap<String, StateEntry>,
     pub last_sync: Option<String>,
     pub last_result: String,
+    /// Deletes and overwrites the last two-way run found but did not apply.
+    #[serde(default)]
+    pub pending: Pending,
+}
+
+/// Deletes and overwrites waiting for the user's confirmation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pending {
+    pub deletes: usize,
+    pub overwrites: usize,
+}
+
+impl Pending {
+    fn of<'a>(items: impl Iterator<Item = &'a Item>) -> Pending {
+        let mut p = Pending::default();
+        for i in items {
+            match i.action {
+                Action::DeleteLocal | Action::DeleteRemote => p.deletes += 1,
+                Action::OverwriteLocal | Action::OverwriteRemote => p.overwrites += 1,
+                _ => {}
+            }
+        }
+        p
+    }
+
+    pub fn total(&self) -> usize {
+        self.deletes + self.overwrites
+    }
+
+    /// E.g. "1 deletion, 2 overwrites".
+    pub fn describe(&self) -> String {
+        let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+        let mut parts = Vec::new();
+        if self.deletes > 0 {
+            parts.push(n(self.deletes, "deletion", "deletions"));
+        }
+        if self.overwrites > 0 {
+            parts.push(n(self.overwrites, "overwrite", "overwrites"));
+        }
+        parts.join(", ")
+    }
+}
+
+/// "1 change", "3 changes".
+pub fn changes(n: usize) -> String {
+    format!("{n} change{}", if n == 1 { "" } else { "s" })
+}
+
+/// Remembers what a two-way plan would delete or overwrite, so the overview and the tray can
+/// point the user to it. Other modes say nothing about two-way and leave it alone.
+pub fn record_pending(plan: &Plan) {
+    if plan.mode != Mode::TwoWay {
+        return;
+    }
+    let mut st = load_state(&plan.pair);
+    let p = Pending::of(plan.items.iter());
+    if st.pending != p {
+        st.pending = p;
+        if let Err(e) = save_state(&plan.pair, &st) {
+            log::warn(format!("[{}] Saving the sync state failed: {e:#}", plan.pair.label()));
+        }
+    }
 }
 
 fn state_path(pair: &Pair) -> PathBuf {
@@ -784,6 +846,14 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
     report.done += report.conflicts.len();
     st.last_sync = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
     st.last_result = format!("{}: {}", planned.mode.label(), report.summary());
+    // What is still waiting: two-way deletes/overwrites that were not selected. A one-way sync
+    // changes the baseline, so the next two-way run will tell.
+    let applied: HashSet<(&str, Action)> = selected.iter().map(|i| (i.path.as_str(), i.action)).collect();
+    st.pending = if planned.mode == Mode::TwoWay {
+        Pending::of(fresh.items.iter().filter(|i| !applied.contains(&(i.path.as_str(), i.action))))
+    } else {
+        Pending::default()
+    };
     save_state(pair, &st).context("saving sync state")?;
     log::info(format!("[{label}] done: {}", report.summary()));
     for f in &report.failed {
@@ -853,16 +923,13 @@ pub fn auto_sync(cfg: &Config, pair: &Pair) -> Result<(Report, usize)> {
         }
     }
     if p.items.iter().all(|i| !i.selected) {
+        record_pending(&p);
         return Ok((Report::default(), pending));
     }
     let r = execute(cfg, &p, &mut |_| {})?;
     Ok((r, pending))
 }
 
-pub fn last_status(pair: &Pair) -> (Option<String>, String) {
-    let st = load_state(pair);
-    (st.last_sync, st.last_result)
-}
 
 #[cfg(test)]
 mod tests {
@@ -972,6 +1039,7 @@ mod tests {
         assert!(has(&l, "e.txt"), "auto-sync copies new files");
         assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "a", "auto-sync must not overwrite");
         assert!(has(&l, "d.txt"), "auto-sync must not delete");
+        assert_eq!(load_state(&pair).pending, Pending { deletes: 1, overwrites: 1 }, "held back for the overview");
         // Declined actions are still pending afterwards.
         let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();
         assert_eq!(acts(&p), vec![("a.txt".into(), Action::OverwriteRemote), ("d.txt".into(), Action::DeleteLocal)]);
@@ -981,6 +1049,7 @@ mod tests {
         assert!(execute(&cfg, &p, &mut |_| {}).is_ok());
         assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "a3-changed-again");
         assert!(!has(&l, "d.txt"), "deleted (moved to trash)");
+        assert_eq!(load_state(&pair).pending.total(), 0, "nothing waiting after confirming");
         // …but a plan whose actions no longer match is refused.
         w(&l.join("x.txt"), "x");
         let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();

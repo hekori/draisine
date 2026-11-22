@@ -20,6 +20,8 @@ use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 pub enum Request {
     /// Un-minimize and focus (already done on Wayland), then start the action if any.
     Show(Option<Mode>),
+    /// Like `Show`, then open the preview of the changes waiting for confirmation.
+    Review,
     Minimize,
 }
 
@@ -80,7 +82,7 @@ pub fn watch(ctx: &egui::Context, win: &(impl HasWindowHandle + HasDisplayHandle
                         None => crate::log::warn("Window request without an activation token: cannot raise the window"),
                     }
                 }
-                st.request = Some(Request::Show(req.action));
+                st.request = Some(if req.review { Request::Review } else { Request::Show(req.action) });
             }
             drop(st);
             ctx.request_repaint();
