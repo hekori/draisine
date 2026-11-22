@@ -1,4 +1,5 @@
-//! Bringing the running window to the front when the tray asks for it.
+//! Bringing the running window to the front when the tray asks for it, or minimizing it when
+//! the tray icon is clicked while the window is in front.
 //!
 //! The request file is watched on a background thread: a minimized window may not get any frames
 //! (on Wayland the compositor stops frame callbacks), so polling from `ui()` would never see it.
@@ -12,32 +13,80 @@ use crate::engine::Mode;
 use crate::ipc;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-/// The latest window request not yet handled by the UI: `Some(action)`.
-pub type Pending = Arc<Mutex<Option<Option<Mode>>>>;
+/// What the UI should do next.
+pub enum Request {
+    /// Un-minimize and focus (already done on Wayland), then start the action if any.
+    Show(Option<Mode>),
+    Minimize,
+}
+
+/// Shared between the UI and the watcher thread.
+#[derive(Default)]
+struct State {
+    /// The latest request not yet handled by the UI.
+    request: Option<Request>,
+    focused: bool,
+    last_focused: Option<Instant>,
+    last_frame: Option<Instant>,
+}
+
+impl State {
+    /// Whether the window is in front. A minimized window may not get frames on Wayland, so its
+    /// focus flag can be stale; it then counts as hidden. The grace period covers a tray host
+    /// that takes the focus for the click.
+    fn in_front(&self) -> bool {
+        let recent = |t: Option<Instant>, ms| t.is_some_and(|t| t.elapsed() < Duration::from_millis(ms));
+        recent(self.last_frame, 1500) && (self.focused || recent(self.last_focused, 600))
+    }
+}
+
+#[derive(Clone)]
+pub struct Watcher(Arc<Mutex<State>>);
+
+impl Watcher {
+    /// Call every frame: records the focus and takes the pending request.
+    pub fn frame(&self, ctx: &egui::Context) -> Option<Request> {
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(false);
+        let mut st = self.0.lock().unwrap();
+        let now = Instant::now();
+        st.last_frame = Some(now);
+        if st.focused && !focused {
+            st.last_focused = Some(now);
+        }
+        st.focused = focused;
+        st.request.take()
+    }
+}
 
 /// Starts watching for window requests; `win` is the window's creation context.
-pub fn watch(ctx: &egui::Context, win: &(impl HasWindowHandle + HasDisplayHandle)) -> Pending {
-    let pending: Pending = Arc::new(Mutex::new(None));
+pub fn watch(ctx: &egui::Context, win: &(impl HasWindowHandle + HasDisplayHandle)) -> Watcher {
+    let watcher = Watcher(Arc::new(Mutex::new(State::default())));
     let activator = Activator::new(win);
-    let (slot, ctx) = (pending.clone(), ctx.clone());
+    let (shared, ctx) = (watcher.0.clone(), ctx.clone());
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_millis(250));
             let Some(req) = ipc::take_request() else { continue };
-            if let Some(a) = &activator {
-                match &req.token {
-                    Some(t) => a.activate(t),
-                    None => crate::log::warn("Window request without an activation token: cannot raise the window"),
+            let mut st = shared.lock().unwrap();
+            if req.toggle && st.in_front() {
+                st.request = Some(Request::Minimize);
+            } else {
+                if let Some(a) = &activator {
+                    match &req.token {
+                        Some(t) => a.activate(t),
+                        None => crate::log::warn("Window request without an activation token: cannot raise the window"),
+                    }
                 }
+                st.request = Some(Request::Show(req.action));
             }
-            *slot.lock().unwrap() = Some(req.action);
+            drop(st);
             ctx.request_repaint();
         }
     });
-    pending
+    watcher
 }
 
 #[cfg(target_os = "linux")]

@@ -30,6 +30,8 @@ fn is_locked(name: &str) -> bool {
 pub struct WindowRequest {
     /// None: just show the window.
     pub action: Option<Mode>,
+    /// Tray icon click: minimize the window if it is in front, otherwise show it.
+    pub toggle: bool,
     /// XDG activation token of the click that caused the request. On Wayland a window may only
     /// raise itself with such a token.
     pub token: Option<String>,
@@ -41,7 +43,16 @@ pub fn env_token() -> Option<String> {
 }
 
 pub fn request_window(action: Option<Mode>, token: Option<String>) {
-    let mut req = action.map(|m| m.arg()).unwrap_or("show").to_string();
+    send_request(action.map(|m| m.arg()).unwrap_or("show"), token);
+}
+
+/// Tray icon click: shows the window, or minimizes it when it is in front.
+pub fn toggle_window(token: Option<String>) {
+    send_request("toggle", token);
+}
+
+fn send_request(kind: &str, token: Option<String>) {
+    let mut req = kind.to_string();
     if let Some(t) = &token {
         req.push('\n');
         req.push_str(t);
@@ -73,9 +84,9 @@ pub fn take_request() -> Option<WindowRequest> {
     let s = std::fs::read_to_string(&p).ok()?;
     let _ = std::fs::remove_file(&p);
     let mut lines = s.lines();
-    let action = Mode::from_arg(lines.next().unwrap_or("").trim());
+    let kind = lines.next().unwrap_or("").trim();
     let token = lines.next().map(str::trim).filter(|t| !t.is_empty()).map(String::from);
-    Some(WindowRequest { action, token })
+    Some(WindowRequest { action: Mode::from_arg(kind), toggle: kind == "toggle", token })
 }
 
 /// What the window tells the tray when it is done.

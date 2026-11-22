@@ -144,7 +144,7 @@ impl ApplicationHandler<UserEvent> for App {
                 TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
                 | TrayIconEvent::DoubleClick { .. },
                 token,
-            ) => ipc::request_window(None, token),
+            ) => ipc::toggle_window(token),
             UserEvent::Tray(..) => {}
             UserEvent::Refresh => self.refresh(),
         }

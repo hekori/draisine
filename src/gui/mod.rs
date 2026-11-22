@@ -106,7 +106,7 @@ struct App {
     /// Pairs that turned out to be in sync, with the time (note fades out on the overview).
     in_sync: Option<(Vec<String>, Instant)>,
     /// Show/action request from the tray, see [`raise`].
-    request: raise::Pending,
+    request: raise::Watcher,
 }
 
 /// How long the “Everything in sync” note stays on a card (the last second fades out).
@@ -433,15 +433,18 @@ impl App {
         for k in done {
             self.test_jobs.remove(&k);
         }
-        let req = self.request.lock().unwrap().take();
-        if let Some(req) = req {
-            // No effect on Wayland, where `raise` has already done this.
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            if let Some(m) = req {
-                self.start_plan(ctx, m, None);
+        match self.request.frame(ctx) {
+            Some(raise::Request::Show(action)) => {
+                // No effect on Wayland, where `raise` has already done this.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                if let Some(m) = action {
+                    self.start_plan(ctx, m, None);
+                }
             }
+            Some(raise::Request::Minimize) => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            None => {}
         }
         if self.last_poll.elapsed() > Duration::from_millis(500) {
             self.last_poll = Instant::now();
