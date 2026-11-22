@@ -411,7 +411,7 @@ pub fn run() -> Result<()> {
 
     let items = Items {
         status: MenuItem::new("", false, None),
-        open: MenuItem::new("Open Draisine", true, None),
+        open: MenuItem::new("Maximize window", true, None),
         diff: MenuItem::new("Diff local ↔ remote …", true, None),
         pull: MenuItem::new("One-way sync remote ➡ local …", true, None),
         push: MenuItem::new("One-way sync local ➡ remote …", true, None),
