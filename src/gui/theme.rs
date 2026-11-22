@@ -184,12 +184,21 @@ pub fn callout<R>(ui: &mut Ui, color: Color32, add: impl FnOnce(&mut Ui) -> R) -
 }
 
 pub fn badge(ui: &mut Ui, text: &str, color: Color32) -> Response {
-    egui::Frame::new()
-        .fill(color.gamma_multiply(0.14))
-        .corner_radius(20)
-        .inner_margin(Margin::symmetric(9, 3))
-        .show(ui, |ui| ui.label(RichText::new(text).color(color).size(12.5)))
-        .response
+    // Painted at its exact size (instead of a Frame) so it never stretches to fill
+    // the available height, e.g. inside a right-to-left / centered layout.
+    let galley = egui::WidgetText::from(RichText::new(text).color(color).size(12.5)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Body,
+    );
+    let pad = vec2(9.0, 3.0);
+    let (rect, resp) = ui.allocate_exact_size(galley.size() + 2.0 * pad, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, CornerRadius::same(20), color.gamma_multiply(0.14));
+        ui.painter().galley(rect.min + pad, galley, color);
+    }
+    resp
 }
 
 // ------------------------------------------------------------------ buttons

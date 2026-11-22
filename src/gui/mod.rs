@@ -1003,7 +1003,7 @@ impl App {
                                     ui.label(theme::bold(&name, 16.0));
                                     theme::badge(ui, &typ, p.blue);
                                 });
-                                ui.label(theme::muted(ui, if used == 0 { "not used by any folder pair".to_string() } else { format!("used by {used} folder pair(s)") }));
+                                ui.label(theme::muted(ui, if used == 0 { "not used by any folder pair".to_string() } else { format!("used by {used} folder pair{}", if used == 1 { "" } else { "s" }) }));
                             });
                             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                                 // Test automatically once; only offer a manual retry after a failure.
