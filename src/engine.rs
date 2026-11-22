@@ -210,14 +210,21 @@ pub fn changes(n: usize) -> String {
     format!("{n} change{}", if n == 1 { "" } else { "s" })
 }
 
+/// The deletes and overwrites among `items` that wait for the user: all of them, except those
+/// auto-sync will apply on its own (see [`auto_safe`]) when it runs for this pair.
+fn waiting<'a>(cfg: &Config, pair: &Pair, st: &State, items: impl Iterator<Item = &'a Item>) -> Pending {
+    let auto = pair.auto_sync && !cfg.auto_sync_paused && st.last_sync.is_some();
+    Pending::of(items.filter(|i| !(auto && auto_safe(i, st))))
+}
+
 /// Remembers what a two-way plan would delete or overwrite, so the overview and the tray can
 /// point the user to it. Other modes say nothing about two-way and leave it alone.
-pub fn record_pending(plan: &Plan) {
+pub fn record_pending(cfg: &Config, plan: &Plan) {
     if plan.mode != Mode::TwoWay {
         return;
     }
     let mut st = load_state(&plan.pair);
-    let p = Pending::of(plan.items.iter());
+    let p = waiting(cfg, &plan.pair, &st, plan.items.iter());
     if st.pending != p {
         st.pending = p;
         if let Err(e) = save_state(&plan.pair, &st) {
@@ -850,7 +857,7 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
     // changes the baseline, so the next two-way run will tell.
     let applied: HashSet<(&str, Action)> = selected.iter().map(|i| (i.path.as_str(), i.action)).collect();
     st.pending = if planned.mode == Mode::TwoWay {
-        Pending::of(fresh.items.iter().filter(|i| !applied.contains(&(i.path.as_str(), i.action))))
+        waiting(cfg, pair, &st, fresh.items.iter().filter(|i| !applied.contains(&(i.path.as_str(), i.action))))
     } else {
         Pending::default()
     };
@@ -908,22 +915,54 @@ pub fn auto_sync_active(pair: &Pair) -> bool {
     pair.auto_sync && has_synced(pair)
 }
 
-/// Unattended two-way sync: executes only non-destructive actions (new files, conflicts).
-/// Returns (report, number of deletes/overwrites waiting for confirmation).
+/// Whether auto-sync may apply this two-way item without asking. Non-destructive actions always
+/// can. A delete or overwrite only when it is clear which side leads and the other side is exactly
+/// as the sync history recorded it:
+/// - the file was in sync at the last sync (recorded on both sides),
+/// - the side that is replaced or deleted still has the recorded size and modification time
+///   (nobody touched it since; otherwise it needs a look),
+/// - the leading side deleted the file, or changed it with a modification time after the recorded
+///   one (a file that went back in time, e.g. restored from a backup, needs a look),
+/// - the mass deletion guard did not deselect it.
+pub fn auto_safe(it: &Item, st: &State) -> bool {
+    use Action::*;
+    if !it.action.destructive() {
+        return true;
+    }
+    let Some(&StateEntry { l: Some(sl), r: Some(sr) }) = st.files.get(&it.path) else { return false };
+    let (src_rec, src_now, dst_rec, dst_now) = match it.action {
+        OverwriteRemote | DeleteRemote => (sl, it.local, sr, it.remote),
+        OverwriteLocal | DeleteLocal => (sr, it.remote, sl, it.local),
+        _ => return false,
+    };
+    let leading_ok = match (it.action, src_now) {
+        (DeleteRemote | DeleteLocal, None) => true,
+        (OverwriteRemote | OverwriteLocal, Some(now)) => now.mtime_ms > src_rec.mtime_ms,
+        _ => false,
+    };
+    it.selected && dst_now == Some(dst_rec) && leading_ok
+}
+
+/// Unattended two-way sync: executes new files, conflicts (keeping both versions) and the deletes
+/// and overwrites that pass [`auto_safe`]. Returns (report, number of deletes/overwrites waiting
+/// for confirmation).
 pub fn auto_sync(cfg: &Config, pair: &Pair) -> Result<(Report, usize)> {
     if !has_synced(pair) {
         bail!("[{}] Auto-sync needs one manual sync first", pair.label());
     }
     let mut p = plan(cfg, pair, Mode::TwoWay)?;
+    let st = load_state(pair);
     let mut pending = 0;
     for i in p.items.iter_mut() {
-        if i.action.destructive() {
+        if !auto_safe(i, &st) {
             i.selected = false;
             pending += 1;
+        } else if i.action.destructive() {
+            log::info(format!("[{}] auto-sync: {} {} ({})", pair.label(), i.action.label(), i.path, i.reason));
         }
     }
     if p.items.iter().all(|i| !i.selected) {
-        record_pending(&p);
+        record_pending(cfg, &p);
         return Ok((Report::default(), pending));
     }
     let r = execute(cfg, &p, &mut |_| {})?;
@@ -1019,7 +1058,8 @@ mod tests {
         assert!(plan(&cfg, &pair, Mode::TwoWay).unwrap().items.is_empty(), "in sync after first run");
         assert!(has_synced(&pair));
 
-        // 3. Local edit + remote delete: both need confirmation; auto-sync must not do them.
+        // 3. Local edit + remote delete, the other side untouched since the last sync: it is clear
+        // which side leads, so auto-sync applies both.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         w(&l.join("a.txt"), "a2-changed");
         fs::remove_file(r.join("d.txt")).unwrap();
@@ -1033,22 +1073,37 @@ mod tests {
                 ("e.txt".into(), Action::CopyToLocal)
             ]
         );
+        let mut pair_auto = pair.clone();
+        pair_auto.auto_sync = true;
+        record_pending(&cfg, &p);
+        assert_eq!(load_state(&pair).pending.total(), 2, "auto-sync off: both wait");
+        record_pending(&cfg, &plan(&cfg, &pair_auto, Mode::TwoWay).unwrap());
+        assert_eq!(load_state(&pair).pending.total(), 0, "auto-sync on: auto-sync will do them");
         let (rep, pending) = auto_sync(&cfg, &pair).unwrap();
-        assert_eq!(pending, 2);
+        assert_eq!(pending, 0);
         assert!(rep.failed.is_empty(), "{:?}", rep.failed);
         assert!(has(&l, "e.txt"), "auto-sync copies new files");
-        assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "a", "auto-sync must not overwrite");
-        assert!(has(&l, "d.txt"), "auto-sync must not delete");
-        assert_eq!(load_state(&pair).pending, Pending { deletes: 1, overwrites: 1 }, "held back for the overview");
-        // Declined actions are still pending afterwards.
-        let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();
-        assert_eq!(acts(&p), vec![("a.txt".into(), Action::OverwriteRemote), ("d.txt".into(), Action::DeleteLocal)]);
+        assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "a2-changed", "auto-sync overwrites the remote");
+        assert!(!has(&l, "d.txt"), "auto-sync deletes (moved to trash)");
+        assert!(plan(&cfg, &pair, Mode::TwoWay).unwrap().items.is_empty(), "in sync after auto-sync");
 
-        // 4. Confirmed execution. Content changes that keep the same actions are fine…
-        w(&l.join("a.txt"), "a3-changed-again");
+        // 4. A change whose time does not fit the sync history (modification time before the
+        // recorded one, e.g. restored from a backup) waits for confirmation.
+        let rec = load_state(&pair).files["a.txt"].l.unwrap();
+        w(&l.join("a.txt"), "a3-restored");
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_millis((rec.mtime_ms - 3_600_000) as u64);
+        fs::File::options().write(true).open(l.join("a.txt")).unwrap().set_modified(old).unwrap();
+        let (rep, pending) = auto_sync(&cfg, &pair).unwrap();
+        assert_eq!((rep.done, pending), (0, 1));
+        assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "a2-changed", "auto-sync must not overwrite");
+        assert_eq!(load_state(&pair).pending, Pending { deletes: 0, overwrites: 1 }, "held back for the overview");
+        let p = plan(&cfg, &pair, Mode::TwoWay).unwrap();
+        assert_eq!(acts(&p), vec![("a.txt".into(), Action::OverwriteRemote)]);
+
+        // Confirmed execution. Content changes that keep the same actions are fine…
+        w(&l.join("a.txt"), "a4-changed-again");
         assert!(execute(&cfg, &p, &mut |_| {}).is_ok());
-        assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "a3-changed-again");
-        assert!(!has(&l, "d.txt"), "deleted (moved to trash)");
+        assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "a4-changed-again");
         assert_eq!(load_state(&pair).pending.total(), 0, "nothing waiting after confirming");
         // …but a plan whose actions no longer match is refused.
         w(&l.join("x.txt"), "x");

@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Draisine – safe sync for Google Drive, OneDrive & Dropbox</title>
-<meta name="description" content="A tray app that syncs local folders with Google Drive, OneDrive, Dropbox and 70+ other clouds. It never deletes or overwrites anything without asking. Linux, Windows, macOS. Free and open source.">
+<meta name="description" content="A tray app that syncs local folders with Google Drive, OneDrive, Dropbox and 70+ other clouds. It only deletes or overwrites without asking when it is clear which side changed. Linux, Windows, macOS. Free and open source.">
 <link rel="icon" type="image/png" href="favicon.png">
 <meta property="og:title" content="Draisine – safe cloud sync">
-<meta property="og:description" content="Sync local folders with Google Drive, OneDrive, Dropbox and more. Nothing is deleted or overwritten without your confirmation.">
+<meta property="og:description" content="Sync local folders with Google Drive, OneDrive, Dropbox and more. Nothing unclear is deleted or overwritten without your confirmation.">
 <meta property="og:type" content="website">
 <style>
   :root {
@@ -133,8 +133,8 @@
 
   <div class="hero">
     <div>
-      <h1>Cloud sync that <em>asks before it deletes.</em></h1>
-      <p class="lead">Draisine is a small tray app that keeps local folders in sync with Google Drive, OneDrive, Dropbox and dozens of other clouds. Every delete and overwrite is shown to you first. Nothing disappears without your confirmation.</p>
+      <h1>Cloud sync that <em>compares first and asks when in doubt.</em></h1>
+      <p class="lead">Draisine is a small tray app that keeps local folders in sync with Google Drive, OneDrive, Dropbox and dozens of other clouds. Before anything is changed, it compares the files on your computer with those in the cloud and with the last sync, so it knows which side changed what. When that is clear, it syncs. When in doubt, it asks you.</p>
       <div class="cta">
         <a class="btn primary" href="#download">Download</a>
         <a class="btn" href="https://github.com/hekori/draisine">View on GitHub</a>
@@ -165,7 +165,7 @@
         <div class="card"><span class="glyph">⇆</span><h3>Diff</h3><p>See what differs between local and remote, side by side. Text files get a line-by-line comparison.</p></div>
         <div class="card"><span class="glyph">⬇</span><h3>Pull</h3><p>Make the local folder an exact copy of the cloud folder.</p></div>
         <div class="card"><span class="glyph">⬆</span><h3>Push</h3><p>Make the cloud folder an exact copy of the local folder.</p></div>
-        <div class="card"><span class="glyph">↻</span><h3>Two-way &amp; auto-sync</h3><p>Changes on either side reach the other. Auto-sync runs in the background and does only harmless things on its own.</p></div>
+        <div class="card"><span class="glyph">↻</span><h3>Two-way &amp; auto-sync</h3><p>Changes on either side reach the other. Auto-sync runs in the background and only acts on its own when it's clear which side changed.</p></div>
       </div>
     </div>
   </section>
@@ -175,10 +175,10 @@
       <h2>Built so you don't lose files</h2>
       <p class="sub">Sync tools that silently delete the wrong thing are how people lose work. Draisine is built around a few strict rules.</p>
       <div class="safety">
-        <div class="card"><span class="dot">1</span><div><h3>You confirm every delete and overwrite</h3><p>A preview lists each change with the reason, with checkboxes. Nothing destructive happens until you confirm.</p></div></div>
+        <div class="card"><span class="dot">1</span><div><h3>You confirm every unclear delete and overwrite</h3><p>A preview lists each change with the reason, with checkboxes. Nothing destructive happens until you confirm, unless auto-sync is on and the change is unambiguous.</p></div></div>
         <div class="card"><span class="dot">2</span><div><h3>Deleted files go to the trash</h3><p>Locally, old files go to the system trash. If that fails, nothing is touched. In the cloud, they can go to a backup folder instead.</p></div></div>
         <div class="card"><span class="dot">3</span><div><h3>Conflicts keep both versions</h3><p>Changed on both sides? You get <code>name (laptop's conflicted copy 2026-11-22).txt</code> next to the original, like Dropbox does.</p></div></div>
-        <div class="card"><span class="dot">4</span><div><h3>Auto-sync never deletes on its own</h3><p>Background sync only adds files. Deletes and overwrites wait for you: the tray icon turns orange and you get a notification.</p></div></div>
+        <div class="card"><span class="dot">4</span><div><h3>Auto-sync only acts when it's clear</h3><p>Background sync deletes or overwrites a file only if just one side changed it and the other side is exactly as at the last sync. Anything else waits for you: the tray icon turns orange and you get a notification.</p></div></div>
         <div class="card"><span class="dot">5</span><div><h3>Stops on suspicious situations</h3><p>A drive that isn't mounted, a folder that suddenly looks empty, or a mass deletion (25 % by default) makes it stop and warn you.</p></div></div>
         <div class="card"><span class="dot">6</span><div><h3>Checks content, not just dates</h3><p>Same size and timestamp isn't enough. Without a verified sync state, files are compared by hash, and everything is checked again just before applying.</p></div></div>
       </div>
@@ -194,12 +194,13 @@
         <table>
           <thead><tr><th>Local ↓ &nbsp;/&nbsp; Cloud →</th><th>unchanged</th><th>new or changed</th><th>deleted</th></tr></thead>
           <tbody>
-            <tr><th>unchanged</th><td>nothing</td><td>update local <span class="ask">· asks</span></td><td>delete local <span class="ask">· asks, to trash</span></td></tr>
-            <tr><th>new or changed</th><td>update cloud <span class="ask">· asks</span></td><td>same content: nothing<br><span class="conflict">otherwise: conflict, keep both</span></td><td>restore to cloud</td></tr>
-            <tr><th>deleted</th><td>delete in cloud <span class="ask">· asks</span></td><td>restore locally</td><td>nothing</td></tr>
+            <tr><th>unchanged</th><td>nothing</td><td>update local <span class="ask">· asks*</span></td><td>delete local <span class="ask">· asks*, to trash</span></td></tr>
+            <tr><th>new or changed</th><td>update cloud <span class="ask">· asks*</span></td><td>same content: nothing<br><span class="conflict">otherwise: conflict, keep both</span></td><td>restore to cloud</td></tr>
+            <tr><th>deleted</th><td>delete in cloud <span class="ask">· asks*</span></td><td>restore locally</td><td>nothing</td></tr>
           </tbody>
         </table>
       </div>
+      <p class="note">* Auto-sync does these on its own only when the file was in sync last time, the other side is exactly as it was then (same size and modification time), and the changed side is newer than recorded or was deleted. Anything else waits for you.</p>
       <p class="note">On the very first sync there is no saved state yet. Then nothing is ever deleted, and files that differ become conflicts. Renames are recognised by size and content hash and repeated on the other side instead of a delete plus a fresh upload.</p>
     </div>
   </section>

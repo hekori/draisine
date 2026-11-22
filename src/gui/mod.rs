@@ -350,7 +350,7 @@ impl App {
                 // First two-way sync of a pair that is already identical: nothing to apply, but the
                 // state must still be recorded, otherwise it counts as never synced (no auto-sync).
                 for p in plans.iter().flatten() {
-                    engine::record_pending(p); // keeps the overview's “waiting” note current
+                    engine::record_pending(&cfg, p); // keeps the overview's “waiting” note current
                     if mode == Mode::TwoWay
                         && p.count(|i| i.action.executable()) == 0
                         && !engine::has_synced(&p.pair)
@@ -734,7 +734,8 @@ impl App {
                             // Auto-sync is offered only once the pair has been synced by hand.
                             if synced {
                                 ui.add_space(16.0);
-                                let hint = "Two-way sync in the background. Deletes and overwrites always wait for you.";
+                                let hint = "Two-way sync in the background. Deletes and overwrites are applied when only one side changed \
+                                            since the last sync; anything unclear waits for you.";
                                 let r = ui.add_enabled_ui(!busy, |ui| theme::toggle(ui, &mut pair.auto_sync)).inner;
                                 if r.on_hover_text(hint).changed() {
                                     log::info(format!("[{}] Auto-sync {}", pair.label(), if pair.auto_sync { "on" } else { "off" }));

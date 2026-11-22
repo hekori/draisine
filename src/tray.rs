@@ -2,9 +2,10 @@
 //!
 //! Auto-sync runs a two-way sync for each pair that has auto-sync on and has been synced manually at
 //! least once (see `engine::auto_sync_active`), every N minutes as set per pair, unless it is paused
-//! from the tray menu. It only executes actions that
-//! cannot lose data (new files, conflicts ➡ conflict files). Deletes and overwrites wait for the
-//! user's confirmation in the window; the tray badge turns orange and a notification is shown.
+//! from the tray menu. It applies new files and conflicts (➡ conflict files), and deletes and
+//! overwrites where only one side changed and the other matches the sync history
+//! (`engine::auto_safe`). All other deletes and overwrites wait for the user's confirmation in the
+//! window; the tray badge turns orange and a notification is shown.
 
 use crate::config::{APP_NAME, Config};
 use crate::engine::{self, Mode};

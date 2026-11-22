@@ -592,7 +592,8 @@ impl Wizard {
             ui.label(theme::muted(
                 ui,
                 "After the first sync, which you do by hand, you can turn on auto-sync on the folder \
-                 pair's card and choose how often it runs. Deletes and overwrites always wait for you.",
+                 pair's card and choose how often it runs. Deletes and overwrites are applied when only one \
+                 side changed since the last sync; anything unclear waits for you.",
             ));
         });
     }

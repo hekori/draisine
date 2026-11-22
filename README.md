@@ -15,13 +15,13 @@ Linux (KDE, GNOME with the AppIndicator extension, …), Windows, macOS.
 
 | Situation | Behaviour |
 |---|---|
-| Delete or overwrite | **Always** shown first and must be confirmed (preview with checkboxes, then a confirmation dialog). |
+| Delete or overwrite | Shown first and must be confirmed (preview with checkboxes, then a confirmation dialog). The only exception is auto-sync, and only when it is clear which side changed (see below). |
 | Delete / overwrite locally | The old file goes to the system **trash**. If that fails, nothing is deleted or overwritten. |
 | Delete / overwrite remotely | Optionally into a per-pair backup folder (`gdrive:_draisine-backup/<timestamp>/…`), otherwise the provider's trash or version history. |
 | Conflict (changed on both sides) | Like Dropbox: the cloud version keeps the name, the local version is kept next to it on both sides as `name (<computer>'s conflicted copy YYYY-MM-DD).ext`. |
 | Rename (two-way) | A file deleted and a file created on the same side with the same size and content hash count as a rename, which is repeated on the other side instead of delete + copy. Ambiguous cases (several files with the same content) fall back to delete + copy. |
 | Preview | *Changes* shows both sides next to each other (`+` created, `−` removed, `~` replaced or renamed, `⚠` conflict) with the reason; *Compare* shows a line diff for text files. *Result* lists the files after applying and where their content comes from. |
-| Auto-sync | Switched on per folder pair, and only after that pair's first sync was done by hand (changing its folders or excludes, or resetting its sync state, turns it off again). Each pair has its own interval; "Pause auto-sync" in the tray menu stops it for all pairs. Only performs non-destructive actions (new files, conflicts). Deletes and overwrites wait: the tray icon turns orange, a notification appears, the folder pair's card shows what is waiting with a *Review* button, and the tray menu gets a *Review …* entry; both open the two-way preview. |
+| Auto-sync | Switched on per folder pair, and only after that pair's first sync was done by hand (changing its folders or excludes, or resetting its sync state, turns it off again). Each pair has its own interval; "Pause auto-sync" in the tray menu stops it for all pairs. Applies new files and conflicts, and deletes and overwrites when it is clear which side changed: the file was in sync at the last sync, the other side still has exactly the recorded size and modification time, and the changed side was deleted or has a newer modification time than recorded (deletes held back by the mass deletion guard don't count). All other deletes and overwrites wait: the tray icon turns orange, a notification appears, the folder pair's card shows what is waiting with a *Review* button, and the tray menu gets a *Review …* entry; both open the two-way preview. |
 | Stale preview | Everything is compared again before applying. If a selected action has changed, nothing is applied. |
 | One side empty or missing | Stops if there were files there at the last sync (e.g. drive not mounted). |
 | Mass deletion | Above a configurable share (default 25 %) deletions are not preselected, and a warning is shown. |
@@ -36,9 +36,15 @@ For each folder pair, Draisine stores the state of both sides after the last suc
 
 | local \ remote | unchanged | new / changed | deleted |
 |---|---|---|---|
-| **unchanged** | nothing | ⬅ overwrite local (asks) | delete local (asks, trash) |
-| **new / changed** | ➡ overwrite remote (asks) | same content: nothing, otherwise **conflict** | ➡ restore |
-| **deleted** | delete remote (asks) | ⬅ restore | nothing |
+| **unchanged** | nothing | ⬅ overwrite local (asks¹) | delete local (asks¹, trash) |
+| **new / changed** | ➡ overwrite remote (asks¹) | same content: nothing, otherwise **conflict** | ➡ restore |
+| **deleted** | delete remote (asks¹) | ⬅ restore | nothing |
+
+¹ Auto-sync applies these without asking when all of the following hold, otherwise they wait for confirmation:
+- the file was in sync at the last sync (recorded on both sides),
+- the side that is overwritten or deleted still has exactly the recorded size and modification time,
+- the changed side deleted the file, or has a newer modification time than recorded (a file that went back in time, e.g. restored from a backup, waits),
+- the mass deletion guard did not hold the delete back.
 
 New files that exist on only one side are copied. On the first sync there is no state yet. Then nothing is ever deleted, and differing files become conflicts. Unconfirmed actions keep their old state and show up again next time.
 
