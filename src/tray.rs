@@ -21,8 +21,9 @@ use winit::window::WindowId;
 
 #[derive(Debug)]
 enum UserEvent {
-    Menu(MenuEvent),
-    Tray(TrayIconEvent),
+    /// With the XDG activation token of the click, if the tray host sent one.
+    Menu(MenuEvent, Option<String>),
+    Tray(TrayIconEvent, Option<String>),
     Refresh,
 }
 
@@ -76,19 +77,19 @@ impl App {
         }
     }
 
-    fn handle_menu(&mut self, ev: MenuEvent, el: &ActiveEventLoop) {
+    fn handle_menu(&mut self, ev: MenuEvent, token: Option<String>, el: &ActiveEventLoop) {
         let id = ev.id;
         let i = &self.items;
         if id == *i.open.id() {
-            ipc::request_window(None);
+            ipc::request_window(None, token);
         } else if id == *i.diff.id() {
-            ipc::request_window(Some(Mode::Diff));
+            ipc::request_window(Some(Mode::Diff), token);
         } else if id == *i.pull.id() {
-            ipc::request_window(Some(Mode::Pull));
+            ipc::request_window(Some(Mode::Pull), token);
         } else if id == *i.push.id() {
-            ipc::request_window(Some(Mode::Push));
+            ipc::request_window(Some(Mode::Push), token);
         } else if id == *i.twoway.id() {
-            ipc::request_window(Some(Mode::TwoWay));
+            ipc::request_window(Some(Mode::TwoWay), token);
         } else if id == *i.auto.id() {
             let mut cfg = Config::load();
             cfg.auto_sync = i.auto.is_checked();
@@ -138,12 +139,13 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
         match ev {
-            UserEvent::Menu(m) => self.handle_menu(m, el),
-            UserEvent::Tray(TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) => {
-                ipc::request_window(None)
-            }
-            UserEvent::Tray(TrayIconEvent::DoubleClick { .. }) => ipc::request_window(None),
-            UserEvent::Tray(_) => {}
+            UserEvent::Menu(m, token) => self.handle_menu(m, token, el),
+            UserEvent::Tray(
+                TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
+                | TrayIconEvent::DoubleClick { .. },
+                token,
+            ) => ipc::request_window(None, token),
+            UserEvent::Tray(..) => {}
             UserEvent::Refresh => self.refresh(),
         }
     }
@@ -367,10 +369,19 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
     }
 }
 
+/// The XDG activation token of the tray event being handled. Only valid inside the tray-icon
+/// event handlers, which ksni calls while it handles the host's D-Bus call.
+fn activation_token() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    return ksni::current_xdg_activation_token();
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
 pub fn run() -> Result<()> {
     let Some(_tray_lock) = ipc::try_lock("tray.lock") else {
         // Already running: just open the window.
-        ipc::request_window(None);
+        ipc::request_window(None, ipc::env_token());
         return Ok(());
     };
     log::info(format!("Draisine {} started (data: {})", env!("CARGO_PKG_VERSION"), crate::config::dirs().state_dir.display()));
@@ -387,11 +398,11 @@ pub fn run() -> Result<()> {
 
     let proxy = event_loop.create_proxy();
     TrayIconEvent::set_event_handler(Some(move |e| {
-        let _ = proxy.send_event(UserEvent::Tray(e));
+        let _ = proxy.send_event(UserEvent::Tray(e, activation_token()));
     }));
     let proxy = event_loop.create_proxy();
     MenuEvent::set_event_handler(Some(move |e| {
-        let _ = proxy.send_event(UserEvent::Menu(e));
+        let _ = proxy.send_event(UserEvent::Menu(e, activation_token()));
     }));
 
     let cfg = Config::load();
@@ -441,7 +452,7 @@ pub fn run() -> Result<()> {
 
     if cfg.pairs.is_empty() {
         // First start: open the setup assistant right away.
-        ipc::request_window(None);
+        ipc::request_window(None, ipc::env_token());
     }
     let mut app = App { tray: None, items, menu, shared, worker: tx };
     event_loop.run_app(&mut app)?;

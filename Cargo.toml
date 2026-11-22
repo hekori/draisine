@@ -26,6 +26,12 @@ winit = "0.30"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 png = "0.18"
+# Same crates/features tray-icon and winit already use: the tray reads the XDG activation token of
+# a click (ksni), the window uses it to raise itself on Wayland (wayland-*).
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [profile.release]
 opt-level = 3

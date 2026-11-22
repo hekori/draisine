@@ -2,6 +2,7 @@
 
 mod browser;
 mod preview;
+mod raise;
 mod theme;
 mod wizard;
 
@@ -104,6 +105,8 @@ struct App {
     syncing: Vec<String>,
     /// Pairs that turned out to be in sync, with the time (note fades out on the overview).
     in_sync: Option<(Vec<String>, Instant)>,
+    /// Show/action request from the tray, see [`raise`].
+    request: raise::Pending,
 }
 
 /// How long the “Everything in sync” note stays on a card (the last second fades out).
@@ -111,7 +114,7 @@ const IN_SYNC_NOTE: Duration = Duration::from_secs(4);
 
 pub fn run(action: Option<Mode>) -> anyhow::Result<()> {
     let Some(_lock) = ipc::try_lock("window.lock") else {
-        ipc::request_window(action);
+        ipc::request_window(action, ipc::env_token());
         return Ok(());
     };
     let _ = ipc::take_request();
@@ -224,6 +227,7 @@ impl App {
             flash: None,
             syncing: Vec::new(),
             in_sync: None,
+            request: raise::watch(&cc.egui_ctx, cc),
         };
         app.load_rinfo(&cc.egui_ctx);
         #[cfg(debug_assertions)]
@@ -429,16 +433,18 @@ impl App {
         for k in done {
             self.test_jobs.remove(&k);
         }
+        let req = self.request.lock().unwrap().take();
+        if let Some(req) = req {
+            // No effect on Wayland, where `raise` has already done this.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if let Some(m) = req {
+                self.start_plan(ctx, m, None);
+            }
+        }
         if self.last_poll.elapsed() > Duration::from_millis(500) {
             self.last_poll = Instant::now();
-            if let Some(req) = ipc::take_request() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                if let Some(m) = req {
-                    self.start_plan(ctx, m, None);
-                }
-            }
             // Auto-sync may be toggled from the tray.
             let disk = Config::load();
             if disk.auto_sync != self.saved.auto_sync {

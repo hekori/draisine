@@ -684,6 +684,7 @@ dependencies = [
  "eframe",
  "egui",
  "gethostname",
+ "ksni",
  "notify-rust",
  "open",
  "png",
@@ -693,6 +694,9 @@ dependencies = [
  "toml",
  "trash",
  "tray-icon",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "winit",
 ]
 

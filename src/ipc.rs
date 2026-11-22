@@ -26,14 +26,37 @@ fn is_locked(name: &str) -> bool {
     try_lock(name).is_none()
 }
 
-pub fn request_window(action: Option<Mode>) {
-    let req = action.map(|m| m.arg()).unwrap_or("show");
+/// A request from the tray (or a second `draisine --window`) to the window.
+pub struct WindowRequest {
+    /// None: just show the window.
+    pub action: Option<Mode>,
+    /// XDG activation token of the click that caused the request. On Wayland a window may only
+    /// raise itself with such a token.
+    pub token: Option<String>,
+}
+
+/// The XDG activation token this process was started with (e.g. by the app launcher), if any.
+pub fn env_token() -> Option<String> {
+    std::env::var("XDG_ACTIVATION_TOKEN").ok().filter(|t| !t.is_empty())
+}
+
+pub fn request_window(action: Option<Mode>, token: Option<String>) {
+    let mut req = action.map(|m| m.arg()).unwrap_or("show").to_string();
+    if let Some(t) = &token {
+        req.push('\n');
+        req.push_str(t);
+    }
     let _ = std::fs::write(path("window-request.txt"), req);
     if !is_locked("window.lock") {
         match std::env::current_exe() {
             Ok(exe) => {
                 let mut cmd = std::process::Command::new(exe);
                 cmd.arg("--window");
+                // A new window picks the token up from the environment and gets the focus.
+                match &token {
+                    Some(t) => cmd.env("XDG_ACTIVATION_TOKEN", t),
+                    None => cmd.env_remove("XDG_ACTIVATION_TOKEN"),
+                };
                 crate::rclone::no_window(&mut cmd);
                 if let Err(e) = cmd.spawn() {
                     crate::log::error(format!("Starting the window failed: {e}"));
@@ -44,12 +67,15 @@ pub fn request_window(action: Option<Mode>) {
     }
 }
 
-/// Window side: returns Some(None) for "show", Some(Some(mode)) for an action request.
-pub fn take_request() -> Option<Option<Mode>> {
+/// Window side: the pending request, if any.
+pub fn take_request() -> Option<WindowRequest> {
     let p = path("window-request.txt");
     let s = std::fs::read_to_string(&p).ok()?;
     let _ = std::fs::remove_file(&p);
-    Some(Mode::from_arg(s.trim()))
+    let mut lines = s.lines();
+    let action = Mode::from_arg(lines.next().unwrap_or("").trim());
+    let token = lines.next().map(str::trim).filter(|t| !t.is_empty()).map(String::from);
+    Some(WindowRequest { action, token })
 }
 
 /// What the window tells the tray when it is done.
