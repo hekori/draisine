@@ -16,7 +16,7 @@ use crate::log;
 use crate::rclone::{Cancel, Entry, Listing, Rclone, join};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -487,7 +487,7 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
 
 /// Turns "deleted on one side" + "new on the same side" with the same content into one rename,
 /// which is then repeated on the other side instead of deleting there and copying the file again.
-/// Only unambiguous cases: exactly one deleted and one new file of that size, with equal hashes.
+/// Only unambiguous cases: exactly one deleted and one new file with that size and content hash.
 fn detect_renames(rc: &Rclone, pair: &Pair, items: &mut Vec<Item>) -> Result<()> {
     for in_cloud in [true, false] {
         let (del, new, rename) = if in_cloud {
@@ -510,14 +510,21 @@ fn detect_renames(rc: &Rclone, pair: &Pair, items: &mut Vec<Item>) -> Result<()>
                 by_size.entry(e.size).or_default().1.push(k);
             }
         }
-        let cands: Vec<(usize, usize)> =
-            by_size.values().filter(|(o, n)| o.len() == 1 && n.len() == 1).map(|(o, n)| (o[0], n[0])).collect();
-        if cands.is_empty() {
+        // Only sizes that occur among both the deleted and the new files can be renames.
+        let (olds, news): (Vec<usize>, Vec<usize>) = by_size
+            .into_values()
+            .filter(|(o, n)| !o.is_empty() && !n.is_empty())
+            .fold((Vec::new(), Vec::new()), |(mut a, mut b), (o, n)| {
+                a.extend(o);
+                b.extend(n);
+                (a, b)
+            });
+        if olds.is_empty() || olds.len() + news.len() > 2000 {
             continue;
         }
-        let olds: Vec<String> = cands.iter().map(|c| items[c.0].path.clone()).collect();
-        let news: Vec<String> = cands.iter().map(|c| items[c.1].path.clone()).collect();
-        let (remote_paths, local_paths) = if in_cloud { (&news, &olds) } else { (&olds, &news) };
+        let old_paths: Vec<String> = olds.iter().map(|&k| items[k].path.clone()).collect();
+        let new_paths: Vec<String> = news.iter().map(|&k| items[k].path.clone()).collect();
+        let (remote_paths, local_paths) = if in_cloud { (&new_paths, &old_paths) } else { (&old_paths, &new_paths) };
         // The cloud decides the hash type (it can only report its own), the local side computes it.
         let rh = rc.hashes(&pair.remote, remote_paths, None)?;
         let ty = rh
@@ -528,14 +535,21 @@ fn detect_renames(rc: &Rclone, pair: &Pair, items: &mut Vec<Item>) -> Result<()>
             })
             .context("the cloud reports no hash")?;
         let lh = rc.hashes(&local_root(pair), local_paths, Some(&ty))?;
-        let hash = |m: &HashMap<String, HashMap<String, String>>, p: &str| m.get(p).and_then(|h| h.get(&ty)).cloned();
-        let mut remove = HashSet::new();
-        for (o, n) in cands {
-            let (op, np) = (items[o].path.clone(), items[n].path.clone());
-            let (ho, hn) = if in_cloud { (hash(&lh, &op), hash(&rh, &np)) } else { (hash(&rh, &op), hash(&lh, &np)) };
-            if ho.is_none() || ho != hn {
-                continue;
+        let (oh, nh) = if in_cloud { (&lh, &rh) } else { (&rh, &lh) };
+        // Group by (size, hash); a rename needs exactly one deleted and one new file per group.
+        let mut groups: BTreeMap<(i64, String), (Vec<usize>, Vec<usize>)> = BTreeMap::new();
+        for (list, side_hashes, old) in [(&olds, oh, true), (&news, nh, false)] {
+            for &k in list {
+                let e = if old { unchanged_side(&items[k]) } else { changed_side(&items[k]) };
+                if let (Some(e), Some(h)) = (e, side_hashes.get(&items[k].path).and_then(|h| h.get(&ty))) {
+                    let g = groups.entry((e.size, h.clone())).or_default();
+                    if old { g.0.push(k) } else { g.1.push(k) }
+                }
             }
+        }
+        let mut remove = HashSet::new();
+        for (o, n) in groups.into_values().filter(|(o, n)| o.len() == 1 && n.len() == 1).map(|(o, n)| (o[0], n[0])) {
+            let op = items[o].path.clone();
             let old = items[o].clone();
             let it = &mut items[n];
             it.action = rename;
@@ -808,7 +822,9 @@ fn copy_batch(
 }
 
 fn fresh_has_remote(plan: &Plan, path: &str) -> bool {
-    plan.items.iter().any(|i| i.path == path && i.remote.is_some()) || plan.in_sync.iter().any(|p| p == path)
+    // A remote rename's `remote` entry describes the old name, not `path`.
+    plan.items.iter().any(|i| i.path == path && i.remote.is_some() && i.action != Action::RenameRemote)
+        || plan.in_sync.iter().any(|p| p == path)
 }
 
 /// Unattended two-way sync: executes only non-destructive actions (new files, conflicts).

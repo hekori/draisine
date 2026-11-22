@@ -18,7 +18,9 @@ Linux (KDE, GNOME with the AppIndicator extension, …), Windows, macOS.
 | Delete or overwrite | **Always** shown first and must be confirmed (preview with checkboxes, then a confirmation dialog). |
 | Delete / overwrite locally | The old file goes to the system **trash**. If that fails, nothing is deleted or overwritten. |
 | Delete / overwrite remotely | Optionally into a per-pair backup folder (`gdrive:_draisine-backup/<timestamp>/…`), otherwise the provider's trash or version history. |
-| Conflict (changed on both sides) | Both versions are kept on both sides: `name-YYYY-MM-DDTHH-MM-SSZ-local.ext` and `name-…-remote.ext`. |
+| Conflict (changed on both sides) | Like Dropbox: the cloud version keeps the name, the local version is kept next to it on both sides as `name (<computer>'s conflicted copy YYYY-MM-DD).ext`. |
+| Rename (two-way) | A file deleted and a file created on the same side with the same size and content hash count as a rename, which is repeated on the other side instead of delete + copy. Ambiguous cases (several files with the same content) fall back to delete + copy. |
+| Preview | *Changes* shows both sides next to each other (`+` created, `−` removed, `~` replaced or renamed, `⚠` conflict) with the reason; *Compare* shows a line diff for text files. *Result* lists the files after applying and where their content comes from. |
 | Auto-sync | Only performs non-destructive actions (new files, conflicts). Deletes and overwrites wait: the tray icon turns orange and a notification appears. |
 | Stale preview | Everything is compared again before applying. If a selected action has changed, nothing is applied. |
 | One side empty or missing | Stops if there were files there at the last sync (e.g. drive not mounted). |
