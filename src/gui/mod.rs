@@ -159,23 +159,32 @@ fn action_color(p: &Pal, a: Action) -> Color32 {
     }
 }
 
-const GROUPS: [(Action, &str, &str); 12] = [
+/// Where a summary chip's change happens: grouped under "This computer" / "Cloud" in that order.
+#[derive(Clone, Copy, PartialEq)]
+enum Side {
+    Local,
+    Remote,
+    Both,
+}
+
+const GROUPS: [(Action, Side, &str, &str); 12] = [
+    (Action::CopyToLocal, Side::Local, "add", "New on this computer (downloaded from the cloud)."),
+    (Action::OverwriteLocal, Side::Local, "modify", "Replaced by the cloud version. The old version goes to the trash."),
+    (Action::RenameLocal, Side::Local, "rename", "Renamed like in the cloud."),
+    (Action::DeleteLocal, Side::Local, "remove", "Deleted here. The files go to the trash."),
+    (Action::CopyToRemote, Side::Remote, "add", "New in the cloud (uploaded from this computer)."),
+    (Action::OverwriteRemote, Side::Remote, "modify", "Replaced by this computer's version. Old version: backup folder or the provider's version history."),
+    (Action::RenameRemote, Side::Remote, "rename", "Renamed like on this computer."),
+    (Action::DeleteRemote, Side::Remote, "remove", "Deleted in the cloud. They go to the backup folder or the provider's trash."),
     (
         Action::Conflict,
+        Side::Both,
         "Conflicts",
         "Changed on both sides. The cloud version keeps the name, yours is kept as a conflicted copy.",
     ),
-    (Action::DeleteLocal, "Delete on this computer", "The files go to the trash."),
-    (Action::DeleteRemote, "Delete in the cloud", "They go to the backup folder or the provider's trash."),
-    (Action::OverwriteLocal, "Replace on this computer", "The old version goes to the trash."),
-    (Action::OverwriteRemote, "Replace in the cloud", "Old version: backup folder or the provider's version history."),
-    (Action::RenameLocal, "Rename on this computer", "Renamed in the cloud."),
-    (Action::RenameRemote, "Rename in the cloud", "Renamed on this computer."),
-    (Action::CopyToRemote, "Upload", "New in the cloud."),
-    (Action::CopyToLocal, "Download", "New on this computer."),
-    (Action::Different, "Different", "Same name, different content."),
-    (Action::OnlyLocal, "Only on this computer", ""),
-    (Action::OnlyRemote, "Only in the cloud", ""),
+    (Action::Different, Side::Both, "Different", "Same name, different content."),
+    (Action::OnlyLocal, Side::Both, "Only on this computer", ""),
+    (Action::OnlyRemote, Side::Both, "Only in the cloud", ""),
 ];
 
 fn mode_title(m: Mode) -> &'static str {
@@ -213,7 +222,7 @@ impl App {
             view: preview::View::Changes,
             only: None,
             show_same: false,
-            diffs: HashMap::new(),
+            diffs: preview::Diffs::default(),
             log_text: String::new(),
             log_loaded: Instant::now() - Duration::from_secs(60),
             last_poll: Instant::now(),
@@ -814,11 +823,23 @@ impl App {
 
         // Summary chips (click: show only that kind of change)
         ui.horizontal_wrapped(|ui| {
-            for (a, title, desc) in GROUPS {
+            let mut side = None;
+            for (a, s, title, desc) in GROUPS {
                 let n: usize = plans.iter().filter_map(|x| x.as_ref().ok()).map(|pl| pl.count(|i| i.action == a)).sum();
                 if n > 0 {
+                    if side != Some(s) {
+                        if side.is_some() {
+                            ui.add_space(10.0);
+                        }
+                        match s {
+                            Side::Local => drop(ui.label(theme::bold("💻  This computer", 13.0).color(p.muted))),
+                            Side::Remote => drop(ui.label(theme::bold("☁  Cloud", 13.0).color(p.muted))),
+                            Side::Both => {}
+                        }
+                        side = Some(s);
+                    }
                     let active = only.map(|o| o == a);
-                    let r = preview::chip(ui, &format!("{n}  {title}"), action_color(&p, a), active);
+                    let r = preview::chip(ui, a, &format!("{n}  {title}"), action_color(&p, a), active);
                     let r = if desc.is_empty() { r } else { r.on_hover_text(desc) };
                     if r.clicked() {
                         *only = if *only == Some(a) { None } else { Some(a) };
@@ -826,6 +847,9 @@ impl App {
                 }
             }
             let same: usize = plans.iter().filter_map(|x| x.as_ref().ok()).map(|pl| pl.in_sync.len()).sum();
+            if side.is_some() {
+                ui.add_space(10.0);
+            }
             theme::badge(ui, &format!("{same}  already identical"), p.muted);
             if only.is_some() && theme::link(ui, "show all").clicked() {
                 *only = None;
