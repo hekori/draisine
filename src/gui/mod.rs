@@ -297,7 +297,9 @@ impl App {
         let cancel: Cancel = Default::default();
         self.plan_cancel = Some(cancel.clone());
         self.plans_job = Some(Bg::spawn(ctx, move || {
-            let plans = pairs
+            // Lets the tray show ↻ while we compare; released when this closure returns.
+            let _sync_lock = ipc::hold_sync_lock();
+            let plans: Vec<Result<Plan, String>> = pairs
                 .iter()
                 .map(|p| {
                     engine::plan_with(&cfg, p, mode, Some(cancel.clone())).map_err(|e| {
@@ -306,6 +308,16 @@ impl App {
                     })
                 })
                 .collect();
+            if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let note = if plans.iter().any(|p| p.is_err()) {
+                    ipc::TrayNote::Changed // let the tray sort the error (offline, sign-in, …)
+                } else if plans.iter().flatten().all(|p| p.count(|i| i.action.executable()) == 0) {
+                    ipc::TrayNote::InSync
+                } else {
+                    ipc::TrayNote::Pending
+                };
+                ipc::notify_tray(note);
+            }
             (mode, plans)
         }));
     }
@@ -331,6 +343,8 @@ impl App {
         self.progress.lock().unwrap().clear();
         let (cfg, prog) = (self.cfg.clone(), self.progress.clone());
         self.exec_job = Some(Bg::spawn(ctx, move || {
+            // Lets the tray show ↻ while we sync; released when this closure returns.
+            let _sync_lock = ipc::hold_sync_lock();
             let mut results = Vec::new();
             for p in &plans {
                 let label = p.pair.label();
@@ -350,6 +364,7 @@ impl App {
                     }
                 });
             }
+            ipc::notify_tray(ipc::TrayNote::Changed);
             results
         }));
     }

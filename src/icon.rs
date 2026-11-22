@@ -1,24 +1,36 @@
 //! The Draisine icon: a rounded badge in the status colour with the logo in white on top.
 //! The logo is an embedded 256x256 alpha mask (`assets/logo_mask.png`, raw bytes in
 //! `logo_mask.bin`), scaled to the requested size at runtime. Used for the window and the app logo.
-//! The tray uses a separate pixel-art glyph without a badge ([`tray_rgba`]), coloured by status.
+//! The tray uses a separate white pixel-art glyph ([`tray_rgba`]) with a small status badge in
+//! the bottom-right corner, like Dropbox: the colour and the symbol both carry the state.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
+    /// No folder pairs set up yet: plain glyph, no badge.
     Off,
+    /// Auto-sync off: grey ⏸.
+    Paused,
+    /// Auto-sync on, last run clean: green ✓.
     Idle,
+    /// Sync running: blue ↻.
     Busy,
+    /// Remote unreachable (no network): grey –.
+    Offline,
+    /// Deletes / overwrites waiting for confirmation: orange !.
     Attention,
+    /// OAuth token expired or revoked, reconnect needed: orange lock.
+    AuthExpired,
+    /// Any other failure: red ✕.
     Error,
 }
 
 impl Status {
     pub fn color(self) -> [u8; 3] {
         match self {
-            Status::Off => [120, 126, 136],
+            Status::Off | Status::Paused | Status::Offline => [120, 126, 136],
             Status::Idle => [34, 154, 94],
             Status::Busy => [37, 110, 230],
-            Status::Attention => [236, 136, 18],
+            Status::Attention | Status::AuthExpired => [236, 136, 18],
             Status::Error => [214, 50, 60],
         }
     }
@@ -156,39 +168,101 @@ fn glyph(x: f32, y: f32) -> f32 {
     }
 }
 
-/// Tray icon: the logo glyph in `color` on a transparent background (no badge), so it sits
-/// next to other monochrome tray icons. Pixel-exact at 22 px and its multiples (44, 66, …).
-pub fn tray_rgba(size: u32, color: [u8; 3]) -> Vec<u8> {
+// ---------------------------------------------------------------- tray badge
+
+/// Badge disc in glyph grid units (22x22): centre and radius, plus the transparent gap that
+/// separates it from the glyph on light and dark panels alike.
+const BADGE_C: (f32, f32) = (16.6, 16.6);
+const BADGE_R: f32 = 5.2;
+const BADGE_GAP: f32 = 1.1;
+
+/// Distance from p to the segment a-b.
+fn seg(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (px, py, bx, by) = (p.0 - a.0, p.1 - a.1, b.0 - a.0, b.1 - a.1);
+    let h = ((px * bx + py * by) / (bx * bx + by * by)).clamp(0.0, 1.0);
+    ((px - bx * h).powi(2) + (py - by * h).powi(2)).sqrt()
+}
+
+/// Whether p lies inside the triangle a-b-c (either winding).
+fn in_tri(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    let e = |u: (f32, f32), v: (f32, f32)| (v.0 - u.0) * (p.1 - u.1) - (v.1 - u.1) * (p.0 - u.0);
+    let (d1, d2, d3) = (e(a, b), e(b, c), e(c, a));
+    !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+}
+
+impl Status {
+    /// Whether the badge symbol covers (u, v), in badge units: disc of radius 1, y down.
+    fn symbol(self, u: f32, v: f32) -> bool {
+        let p = (u, v);
+        const W: f32 = 0.16; // half stroke width
+        match self {
+            Status::Off => false,
+            Status::Idle => seg(p, (-0.48, 0.02), (-0.14, 0.36)) < W || seg(p, (-0.14, 0.36), (0.48, -0.30)) < W,
+            Status::Busy => {
+                // Circular arrow: an open ring, arrow head at the gap's upper end.
+                let r = (u * u + v * v).sqrt();
+                let a = v.atan2(u).to_degrees(); // 0° = right, 90° = down
+                let ring = (r - 0.48).abs() < 0.14 && !(-75.0..-15.0).contains(&a);
+                ring || in_tri(p, (0.08, -0.82), (0.08, -0.14), (0.50, -0.48))
+            }
+            Status::Offline => seg(p, (-0.46, 0.0), (0.46, 0.0)) < W + 0.02,
+            Status::Attention => seg(p, (0.0, -0.52), (0.0, 0.10)) < W || (u * u + (v - 0.46).powi(2)).sqrt() < 0.17,
+            Status::AuthExpired => {
+                let body = u.abs() < 0.42 && (-0.06..0.52).contains(&v);
+                let r = (u * u + (v + 0.12).powi(2)).sqrt();
+                let shackle = (r - 0.27).abs() < 0.10 && v < -0.06;
+                body || shackle
+            }
+            Status::Error => seg(p, (-0.36, -0.36), (0.36, 0.36)) < W || seg(p, (-0.36, 0.36), (0.36, -0.36)) < W,
+            Status::Paused => (0.12..0.38).contains(&u.abs()) && v.abs() < 0.44,
+        }
+    }
+}
+
+/// Tray icon: the white logo glyph on a transparent background, so it sits next to other
+/// monochrome tray icons, with the status badge in the bottom-right corner (none for
+/// [`Status::Off`]). Pixel-exact at 22 px and its multiples (44, 66, …).
+pub fn tray_rgba(size: u32, status: Status) -> Vec<u8> {
     const SS: u32 = 8; // samples per axis and pixel
+    const WHITE: [f32; 3] = [255.0, 255.0, 255.0];
+    let badge = status != Status::Off;
+    let bc = status.color().map(|c| c as f32);
     let unit = 22.0 / size as f32;
     let mut px = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
         for x in 0..size {
-            let mut a = 0.0;
+            // Accumulate premultiplied colour and alpha over the samples.
+            let (mut acc, mut a) = ([0f32; 3], 0f32);
             for sy in 0..SS {
                 for sx in 0..SS {
                     let gx = (x as f32 + (sx as f32 + 0.5) / SS as f32) * unit;
                     let gy = (y as f32 + (sy as f32 + 0.5) / SS as f32) * unit;
-                    a += glyph(gx, gy);
+                    let (dx, dy) = (gx - BADGE_C.0, gy - BADGE_C.1);
+                    let d = (dx * dx + dy * dy).sqrt();
+                    let (c, sa) = if badge && d < BADGE_R {
+                        let sym = status.symbol(dx / BADGE_R, dy / BADGE_R);
+                        (if sym { WHITE } else { bc }, 1.0)
+                    } else if badge && d < BADGE_R + BADGE_GAP {
+                        (WHITE, 0.0)
+                    } else {
+                        (WHITE, glyph(gx, gy))
+                    };
+                    for k in 0..3 {
+                        acc[k] += c[k] * sa;
+                    }
+                    a += sa;
                 }
             }
             let i = ((y * size + x) * 4) as usize;
-            px[i..i + 3].copy_from_slice(&color);
+            if a > 0.0 {
+                for k in 0..3 {
+                    px[i + k] = (acc[k] / a).round() as u8;
+                }
+            }
             px[i + 3] = (a / (SS * SS) as f32 * 255.0).round() as u8;
         }
     }
     px
-}
-
-impl Status {
-    /// Glyph colour in the tray: white like the neighbouring icons while all is well,
-    /// the status colour when something is going on or needs attention.
-    pub fn tray_color(self) -> [u8; 3] {
-        match self {
-            Status::Off | Status::Idle => [255, 255, 255],
-            s => s.color(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -203,6 +277,21 @@ mod tests {
         assert_eq!(px[c + 3], 255);
     }
 
+    #[test]
+    fn tray_badge() {
+        let at = |px: &[u8], x: u32, y: u32| px[((y * 44 + x) * 4) as usize..][..4].to_vec();
+        // No badge when nothing is set up: the right wheel stays white.
+        let off = tray_rgba(44, Status::Off);
+        assert_eq!(at(&off, 29, 31), vec![255, 255, 255, 255]);
+        // Error badge: red disc edge, white cross in the centre, transparent gap around it.
+        let err = tray_rgba(44, Status::Error);
+        assert_eq!(at(&err, 33, 24), vec![214, 50, 60, 255]);
+        assert_eq!(&at(&err, 33, 33)[..], &[255, 255, 255, 255]);
+        assert_eq!(at(&err, 25, 41)[3], 0); // rail cut by the gap
+        // Glyph away from the badge stays white.
+        assert_eq!(at(&err, 8, 4), vec![255, 255, 255, 255]);
+    }
+
     /// Writes preview images: `DRAISINE_ICON_PREVIEW=/some/dir cargo test icon_preview -- --ignored`
     #[test]
     #[ignore]
@@ -211,14 +300,15 @@ mod tests {
             eprintln!("DRAISINE_ICON_PREVIEW not set, skipping");
             return;
         };
-        for st in [Status::Off, Status::Idle, Status::Busy, Status::Attention, Status::Error] {
+        use Status::*;
+        for st in [Off, Paused, Idle, Busy, Offline, Attention, AuthExpired, Error] {
             for size in [16u32, 22, 32, 64, 256] {
                 let path = format!("{dir}/{st:?}-{size}.rgba");
                 std::fs::write(path, rgba(size, st.color())).unwrap();
             }
             for size in [22u32, 44, 64] {
                 let path = format!("{dir}/tray-{st:?}-{size}.rgba");
-                std::fs::write(path, tray_rgba(size, st.tray_color())).unwrap();
+                std::fs::write(path, tray_rgba(size, st)).unwrap();
             }
         }
     }

@@ -2,7 +2,7 @@
 //!
 //! Auto-sync runs a two-way sync per enabled pair every N minutes but only executes actions that
 //! cannot lose data (new files, conflicts ➡ conflict files). Deletes and overwrites wait for the
-//! user's confirmation in the window; the tray turns orange and a notification is shown.
+//! user's confirmation in the window; the tray badge turns orange and a notification is shown.
 
 use crate::config::{APP_NAME, Config};
 use crate::engine::{self, Mode};
@@ -62,7 +62,7 @@ struct App {
 
 fn tray_icon(status: Status) -> tray_icon::Icon {
     // 44 = 2 x 22: pixel-exact on HiDPI panels, and an exact halving for the usual 22 px slot.
-    tray_icon::Icon::from_rgba(icon::tray_rgba(44, status.tray_color()), 44, 44).expect("icon")
+    tray_icon::Icon::from_rgba(icon::tray_rgba(44, status), 44, 44).expect("icon")
 }
 
 impl App {
@@ -168,7 +168,58 @@ fn idle_status(cfg: &Config) -> (Status, String) {
     } else if cfg.auto_sync {
         (Status::Idle, format!("Auto-sync on (every {} min)", cfg.interval_minutes))
     } else {
-        (Status::Off, "Auto-sync off".into())
+        (Status::Paused, "Auto-sync off".into())
+    }
+}
+
+/// Outcome states that stay visible until the next run, even when the configuration changes.
+fn sticky(s: Status) -> bool {
+    matches!(s, Status::Attention | Status::Error | Status::AuthExpired | Status::Offline)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorKind {
+    Offline,
+    Auth,
+    Other,
+}
+
+/// Sorts an error by the rclone / OS message it carries.
+fn classify(msg: &str) -> ErrorKind {
+    const AUTH: &[&str] = &[
+        "invalid_grant",
+        "cannot fetch token",
+        "couldn't fetch token",
+        "failed to get token",
+        "token expired",
+        "expired_access_token",
+        "invalid_access_token",
+        "token has been expired or revoked",
+        "unauthorized",
+        "re-authenticate",
+        "reconnect",
+    ];
+    const OFFLINE: &[&str] = &[
+        "no such host",
+        "temporary failure in name resolution",
+        "network is unreachable",
+        "no route to host",
+        "dial tcp",
+        "i/o timeout",
+        "tls handshake timeout",
+        "connection refused",
+        "connection reset",
+        "context deadline exceeded",
+        "server misbehaving",
+        "no internet",
+    ];
+    let m = msg.to_lowercase();
+    if AUTH.iter().any(|k| m.contains(k)) {
+        ErrorKind::Auth
+    } else if OFFLINE.iter().any(|k| m.contains(k)) {
+        ErrorKind::Offline
+    } else {
+        ErrorKind::Other
     }
 }
 
@@ -177,12 +228,60 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
     let mut mtime = Config::mtime();
     let mut last_run: Option<Instant> = None;
     let mut last_note = String::new();
+    let mut window_busy = false;
+    let mut before_window: Option<(Status, String)> = None;
     loop {
         let mut force = false;
         match rx.recv_timeout(Duration::from_secs(2)) {
             Ok(WorkerCmd::RunNow) => force = true,
             Ok(WorkerCmd::Quit) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
+        }
+        // A preview or sync started in the window: show ↻ while it runs, then take over its outcome.
+        let busy_now = ipc::window_syncing();
+        if busy_now && !window_busy {
+            before_window = Some({
+                let s = shared.lock().unwrap();
+                (s.status, s.text.clone())
+            });
+            set(&shared, &proxy, Status::Busy, "Comparing / syncing in the window …".into());
+        }
+        let note = ipc::take_tray_note();
+        let released = window_busy && !busy_now;
+        window_busy = busy_now;
+        if busy_now {
+            continue; // the engine's lock would refuse an auto-sync now anyway
+        }
+        match note {
+            Some(ipc::TrayNote::InSync) => {
+                // The window just compared everything: nothing to do, nothing waiting.
+                let now = chrono::Local::now().format("%H:%M");
+                last_note.clear();
+                let (st, t) = idle_status(&cfg);
+                let t = if st == Status::Idle { format!("{t}, in sync ({now})") } else { t };
+                set(&shared, &proxy, st, t);
+            }
+            Some(ipc::TrayNote::Pending) => {
+                let now = chrono::Local::now().format("%H:%M");
+                set(&shared, &proxy, Status::Attention, format!("Changes found in the preview ({now})"));
+            }
+            Some(ipc::TrayNote::Changed) if cfg.auto_sync => {
+                // A safe two-way run computes the real state: ✓, ! (still waiting), offline, …
+                force = true;
+            }
+            Some(ipc::TrayNote::Changed) => {
+                // Auto-sync off: don't touch files, just drop the old outcome badge.
+                last_note.clear();
+                let (st, t) = idle_status(&cfg);
+                set(&shared, &proxy, st, t);
+            }
+            None if released => {
+                // Cancelled, or the window went away: back to what was shown before.
+                if let Some((st, t)) = before_window.take() {
+                    set(&shared, &proxy, st, t);
+                }
+            }
+            None => {}
         }
         let m = Config::mtime();
         if m != mtime {
@@ -195,7 +294,7 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
                 last_run = None; // turning auto-sync on runs right away
             }
             let s = shared.lock().unwrap().status;
-            if s != Status::Attention && s != Status::Error {
+            if !sticky(s) {
                 let (st, t) = idle_status(&cfg);
                 set(&shared, &proxy, st, t);
             } else {
@@ -225,13 +324,25 @@ fn worker(rx: mpsc::Receiver<WorkerCmd>, shared: Arc<Mutex<Shared>>, proxy: Even
                 }
                 Err(e) => {
                     log::error(format!("[{}] Auto-Sync: {e:#}", p.label()));
-                    errors.push(format!("{}: {e}", p.label()));
+                    errors.push(format!("{}: {e:#}", p.label()));
                 }
             }
         }
         let now = chrono::Local::now().format("%H:%M");
-        let (status, text, note) = if !errors.is_empty() {
-            (Status::Error, format!("Auto-sync error ({now}), see log"), format!("Sync error:\n{}", errors[0]))
+        let kinds: Vec<_> = errors.iter().map(|e| classify(e)).collect();
+        let (status, text, note) = if kinds.contains(&ErrorKind::Other) {
+            let e = errors.iter().zip(&kinds).find(|(_, k)| **k == ErrorKind::Other).unwrap().0;
+            (Status::Error, format!("Auto-sync error ({now}), see log"), format!("Sync error:\n{e}"))
+        } else if let Some(i) = kinds.iter().position(|k| *k == ErrorKind::Auth) {
+            let pair = errors[i].split(':').next().unwrap_or_default();
+            (
+                Status::AuthExpired,
+                format!("Sign-in expired ({now}), please reconnect"),
+                format!("The sign-in for {pair} has expired. Please reconnect it in Draisine."),
+            )
+        } else if !errors.is_empty() {
+            // Offline: expected on laptops, so no notification, just the badge.
+            (Status::Offline, format!("Offline, last attempt {now}"), String::new())
         } else if pending > 0 {
             (
                 Status::Attention,
@@ -335,4 +446,20 @@ pub fn run() -> Result<()> {
     let mut app = App { tray: None, items, menu, shared, worker: tx };
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_errors() {
+        use ErrorKind::*;
+        let auth = "gdrive: Listing gdrive: failed:\nCRITICAL: Failed to create file system: couldn't fetch token: invalid_grant: maybe token expired? - try refreshing with \"rclone config reconnect gdrive:\"";
+        assert_eq!(classify(auth), Auth);
+        let net = "onedrive: Listing onedrive: failed:\nERROR: Get \"https://graph.microsoft.com/v1.0/me/drive\": dial tcp: lookup graph.microsoft.com: no such host";
+        assert_eq!(classify(net), Offline);
+        assert_eq!(classify("Photos: Another sync is running. Please try again later."), Other);
+        assert_eq!(classify("Docs: 401 files compared"), Other);
+    }
 }
