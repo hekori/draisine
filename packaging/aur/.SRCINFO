@@ -1,0 +1,22 @@
+pkgbase = draisine
+	pkgdesc = Tray app for safe rclone sync (diff, 1-way, 2-way) between local folders and cloud remotes
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/hekori/draisine
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = cargo
+	depends = rclone
+	depends = gcc-libs
+	depends = glibc
+	depends = dbus
+	optdepends = libxkbcommon: keyboard input
+	optdepends = wayland: Wayland support
+	optdepends = libx11: X11 support
+	optdepends = mesa: OpenGL rendering
+	options = !lto
+	source = draisine-0.1.1.tar.gz::https://github.com/hekori/draisine/archive/refs/tags/v0.1.1.tar.gz
+	sha256sums = 74f8b85c292aa68b218258a18efc00ca908435361f943148f1f983a1d6feda51
+
+pkgname = draisine

@@ -1,0 +1,38 @@
+# Maintainer: hekori <https://github.com/hekori>
+pkgname=draisine
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Tray app for safe rclone sync (diff, 1-way, 2-way) between local folders and cloud remotes"
+arch=('x86_64' 'aarch64')
+url="https://github.com/hekori/draisine"
+license=('MIT')
+depends=('rclone' 'gcc-libs' 'glibc' 'dbus')
+optdepends=('libxkbcommon: keyboard input'
+            'wayland: Wayland support'
+            'libx11: X11 support'
+            'mesa: OpenGL rendering')
+makedepends=('cargo')
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('74f8b85c292aa68b218258a18efc00ca908435361f943148f1f983a1d6feda51')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/draisine "$pkgdir/usr/bin/draisine"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 assets/THIRD_PARTY.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY.txt"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
