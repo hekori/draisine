@@ -389,6 +389,9 @@ pub mod mdi {
     pub const DROPBOX: char = '\u{F01E3}';
     pub const MICROSOFT_ONEDRIVE: char = '\u{F03CA}';
     pub const CLOUD_OUTLINE: char = '\u{F0163}';
+    pub const BUCKET_OUTLINE: char = '\u{F1416}';
+    pub const FOLDER_NETWORK_OUTLINE: char = '\u{F0C81}';
+    pub const SERVER_SECURITY: char = '\u{F0492}';
 }
 
 /// Brand icon and color for an rclone backend type, if it has one.
@@ -397,6 +400,9 @@ pub fn provider_glyph(typ: &str) -> Option<(char, Color32)> {
         "drive" => Some((mdi::GOOGLE_DRIVE, Color32::from_rgb(0x1f, 0xa4, 0x63))),
         "dropbox" => Some((mdi::DROPBOX, Color32::from_rgb(0x00, 0x61, 0xff))),
         "onedrive" => Some((mdi::MICROSOFT_ONEDRIVE, Color32::from_rgb(0x00, 0x78, 0xd4))),
+        "s3" => Some((mdi::BUCKET_OUTLINE, Color32::from_rgb(0xe2, 0x6a, 0x12))),
+        "webdav" => Some((mdi::FOLDER_NETWORK_OUTLINE, Color32::from_rgb(0x00, 0x82, 0xc9))),
+        "sftp" => Some((mdi::SERVER_SECURITY, Color32::from_rgb(0x5b, 0x6b, 0x7c))),
         _ => None,
     }
 }
@@ -414,6 +420,9 @@ pub fn provider_name(typ: &str) -> &str {
         "onedrive" => "OneDrive",
         "pcloud" => "pCloud",
         "box" => "Box",
+        "s3" => "S3",
+        "webdav" => "WebDAV",
+        "sftp" => "SFTP",
         t => t,
     }
 }

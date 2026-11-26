@@ -7,6 +7,7 @@ use crate::config::{Config, Pair};
 use crate::log;
 use crate::rclone::Rclone;
 use eframe::egui::{self, RichText, Ui, vec2};
+use std::collections::HashMap;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 
@@ -27,16 +28,92 @@ struct Provider {
     name: &'static str,
     typ: &'static str,
     default_name: &'static str,
+    /// Empty: OAuth sign-in in the browser. Otherwise: parameters entered in a form.
+    fields: &'static [Field],
 }
 
-const PROVIDERS: [Provider; 6] = [
-    Provider { icon: "logo:drive", name: "Google Drive", typ: "drive", default_name: "gdrive" },
-    Provider { icon: "logo:onedrive", name: "OneDrive", typ: "onedrive", default_name: "onedrive" },
-    Provider { icon: "logo:dropbox", name: "Dropbox", typ: "dropbox", default_name: "dropbox" },
-    Provider { icon: "☁", name: "pCloud", typ: "pcloud", default_name: "pcloud" },
-    Provider { icon: "📦", name: "Box", typ: "box", default_name: "box" },
-    Provider { icon: "⚙", name: "Other …", typ: "", default_name: "" },
+/// One `key=value` parameter for `rclone config create`.
+struct Field {
+    key: &'static str,
+    label: &'static str,
+    hint: &'static str,
+    secret: bool,
+    required: bool,
+    /// (rclone value, label); non-empty = drop-down, the first entry is the default.
+    choices: &'static [(&'static str, &'static str)],
+}
+
+const fn text(key: &'static str, label: &'static str, hint: &'static str, required: bool) -> Field {
+    Field { key, label, hint, secret: false, required, choices: &[] }
+}
+
+const fn secret(key: &'static str, label: &'static str, hint: &'static str, required: bool) -> Field {
+    Field { key, label, hint, secret: true, required, choices: &[] }
+}
+
+const fn choice(key: &'static str, label: &'static str, choices: &'static [(&'static str, &'static str)]) -> Field {
+    Field { key, label, hint: "", secret: false, required: true, choices }
+}
+
+const S3_FIELDS: &[Field] = &[
+    choice(
+        "provider",
+        "Provider",
+        &[
+            ("AWS", "Amazon S3"),
+            ("Cloudflare", "Cloudflare R2"),
+            ("Wasabi", "Wasabi"),
+            ("Hetzner", "Hetzner Object Storage"),
+            ("IDrive", "IDrive e2"),
+            ("Scaleway", "Scaleway"),
+            ("DigitalOcean", "DigitalOcean Spaces"),
+            ("Minio", "MinIO"),
+            ("Other", "Other S3-compatible"),
+        ],
+    ),
+    text("access_key_id", "Access key ID", "", true),
+    secret("secret_access_key", "Secret access key", "", true),
+    text("region", "Region", "e.g. eu-central-1 (optional)", false),
+    // Required for everything but AWS, see `missing_field`.
+    text("endpoint", "Endpoint", "e.g. https://s3.example.com", false),
 ];
+
+const WEBDAV_FIELDS: &[Field] = &[
+    text("url", "Server URL", "e.g. https://cloud.example.com/remote.php/dav/files/USER", true),
+    choice(
+        "vendor",
+        "Server type",
+        &[("nextcloud", "Nextcloud"), ("owncloud", "ownCloud"), ("fastmail", "Fastmail Files"), ("other", "Other WebDAV")],
+    ),
+    text("user", "User name", "", true),
+    secret("pass", "Password", "app password recommended", true),
+];
+
+const SFTP_FIELDS: &[Field] = &[
+    text("host", "Server", "e.g. nas.example.com", true),
+    text("port", "Port", "22", false),
+    text("user", "User name", "", true),
+    secret("pass", "Password", "leave empty to use an SSH key", false),
+    text("key_file", "SSH key file", "e.g. ~/.ssh/id_ed25519 (empty: ssh-agent)", false),
+];
+
+const PROVIDERS: [Provider; 9] = [
+    Provider { icon: "logo:drive", name: "Google Drive", typ: "drive", default_name: "gdrive", fields: &[] },
+    Provider { icon: "logo:onedrive", name: "OneDrive", typ: "onedrive", default_name: "onedrive", fields: &[] },
+    Provider { icon: "logo:dropbox", name: "Dropbox", typ: "dropbox", default_name: "dropbox", fields: &[] },
+    Provider { icon: "☁", name: "pCloud", typ: "pcloud", default_name: "pcloud", fields: &[] },
+    Provider { icon: "📦", name: "Box", typ: "box", default_name: "box", fields: &[] },
+    Provider { icon: "logo:s3", name: "S3", typ: "s3", default_name: "s3", fields: S3_FIELDS },
+    Provider { icon: "logo:webdav", name: "WebDAV", typ: "webdav", default_name: "webdav", fields: WEBDAV_FIELDS },
+    Provider { icon: "logo:sftp", name: "SFTP", typ: "sftp", default_name: "sftp", fields: SFTP_FIELDS },
+    Provider { icon: "⚙", name: "Other …", typ: "", default_name: "", fields: &[] },
+];
+
+impl Provider {
+    fn is_form(&self) -> bool {
+        !self.fields.is_empty()
+    }
+}
 
 pub enum Outcome {
     Continue,
@@ -56,6 +133,8 @@ pub struct Wizard {
     existing: Option<String>,
     provider: usize,
     name: String,
+    /// Form values, keyed "<type>.<field key>" so switching provider keeps them.
+    form: HashMap<String, String>,
     login_job: Option<Bg<Result<(), String>>>,
     child: Arc<Mutex<Option<Child>>>,
     login: Option<Result<(), String>>,
@@ -79,6 +158,7 @@ impl Wizard {
             existing: None,
             provider: 0,
             name: "gdrive".into(),
+            form: HashMap::new(),
             login_job: None,
             child: Arc::new(Mutex::new(None)),
             login: None,
@@ -109,6 +189,33 @@ impl Wizard {
             Some(Ok((_, r))) => r.clone(),
             _ => Vec::new(),
         }
+    }
+
+    /// Current value of a form field (choice fields default to their first entry).
+    fn value(&self, typ: &str, f: &Field) -> String {
+        match self.form.get(&format!("{typ}.{}", f.key)) {
+            Some(v) => v.trim().to_string(),
+            None => f.choices.first().map(|c| c.0.to_string()).unwrap_or_default(),
+        }
+    }
+
+    /// Non-empty parameters for `rclone config create`.
+    fn params(&self) -> Vec<(String, String)> {
+        let pr = &PROVIDERS[self.provider];
+        pr.fields
+            .iter()
+            .map(|f| (f.key.to_string(), self.value(pr.typ, f)))
+            .filter(|(_, v)| !v.is_empty())
+            .collect()
+    }
+
+    /// Label of the first required field that is still empty.
+    fn missing_field(&self) -> Option<&'static str> {
+        let pr = &PROVIDERS[self.provider];
+        pr.fields.iter().find_map(|f| {
+            let required = f.required || (pr.typ == "s3" && f.key == "endpoint" && self.value("s3", &S3_FIELDS[0]) != "AWS");
+            (required && self.value(pr.typ, f).is_empty()).then_some(f.label)
+        })
     }
 
     fn load_info(&mut self, ctx: &egui::Context, cfg: &Config) {
@@ -165,7 +272,11 @@ impl Wizard {
     pub fn body(&mut self, ui: &mut Ui, cfg: &mut Config) {
         Self::centred(ui, |ui| {
             ui.add_space(12.0);
-            theme::steps(ui, &LABELS, self.step as usize);
+            let mut labels = LABELS;
+            if self.existing.is_none() && PROVIDERS[self.provider].is_form() {
+                labels[3] = "Details";
+            }
+            theme::steps(ui, &labels, self.step as usize);
             ui.add_space(18.0);
             theme::card(ui, |ui| match self.step {
                 Step::Welcome => self.welcome(ui),
@@ -199,10 +310,7 @@ impl Wizard {
                 if self.existing.is_some() {
                     true
                 } else {
-                    let n = self.name.trim();
                     !PROVIDERS[self.provider].typ.is_empty()
-                        && valid_name(n)
-                        && !self.remotes().iter().any(|r| r.0 == n)
                 }
             }
             Step::Login => matches!(self.login, Some(Ok(()))),
@@ -369,7 +477,6 @@ impl Wizard {
     }
 
     fn connection(&mut self, ui: &mut Ui) {
-        let p = pal(ui);
         ui.label(theme::bold("Which cloud storage do you want to connect?", 22.0));
         let remotes = self.remotes();
         if !remotes.is_empty() {
@@ -387,13 +494,19 @@ impl Wizard {
             ui.add_space(6.0);
             theme::section(ui, "New connection");
         } else {
-            ui.label(theme::muted(ui, "Choose your provider. In the next step you sign in in your browser."));
+            ui.label(theme::muted(ui, "Choose your provider. Then you sign in or enter the connection details."));
             ui.add_space(6.0);
         }
         ui.horizontal_wrapped(|ui| {
             for (i, pr) in PROVIDERS.iter().enumerate() {
                 let sel = self.existing.is_none() && self.provider == i;
-                if theme::choice_card(ui, vec2(170.0, 96.0), sel, pr.icon, pr.name, "").clicked() {
+                let sub = match pr.typ {
+                    "s3" => "R2, Wasabi, MinIO …",
+                    "webdav" => "Nextcloud, ownCloud …",
+                    "sftp" => "Server, NAS",
+                    _ => "",
+                };
+                if theme::choice_card(ui, vec2(170.0, 96.0), sel, pr.icon, pr.name, sub).clicked() {
                     self.existing = None;
                     self.provider = i;
                     if !pr.default_name.is_empty() {
@@ -402,49 +515,114 @@ impl Wizard {
                 }
             }
         });
-        if self.existing.is_none() {
+        if self.existing.is_none() && PROVIDERS[self.provider].typ.is_empty() {
+            let p = pal(ui);
             ui.add_space(8.0);
-            if PROVIDERS[self.provider].typ.is_empty() {
-                theme::callout(ui, p.blue, |ui| {
-                    ui.label(theme::bold("Other providers (WebDAV, S3, Nextcloud, SFTP …)", 14.5));
-                    ui.label("rclone supports over 70 providers. Set yours up once in a terminal:");
-                    ui.monospace("rclone config");
-                    ui.label("Then click “Back” and “Next” again: the new connection appears above.");
-                    if theme::link(ui, "Open the guide on rclone.org").clicked() {
-                        let _ = open::that_detached("https://rclone.org/docs/");
-                    }
-                });
-            } else {
-                ui.horizontal(|ui| {
-                    ui.label("Connection name");
-                    ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(200.0));
-                });
-                let n = self.name.trim();
-                if !valid_name(n) {
-                    ui.label(RichText::new("Use only letters, digits, - and _.").color(p.orange).small());
-                } else if remotes.iter().any(|r| r.0 == n) {
-                    ui.label(RichText::new("This name already exists.").color(p.orange).small());
-                } else {
-                    ui.label(theme::muted(ui, format!("Folders will later be addressed as e.g. “{n}:Documents”.")).small());
+            theme::callout(ui, p.blue, |ui| {
+                ui.label(theme::bold("Other providers (FTP, Mega, Koofr, Proton Drive …)", 14.5));
+                ui.label("rclone supports over 70 providers. Set yours up once in a terminal:");
+                ui.monospace("rclone config");
+                ui.label("Then click “Back” and “Next” again: the new connection appears above.");
+                if theme::link(ui, "Open the guide on rclone.org").clicked() {
+                    let _ = open::that_detached("https://rclone.org/docs/");
                 }
-            }
+            });
         }
+    }
+
+    /// Connection name input with validation hint.
+    fn name_ui(&mut self, ui: &mut Ui) {
+        let p = pal(ui);
+        let remotes = self.remotes();
+        ui.horizontal(|ui| {
+            ui.label("Connection name");
+            ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(200.0));
+        });
+        let n = self.name.trim();
+        if !valid_name(n) {
+            ui.label(RichText::new("Use only letters, digits, - and _.").color(p.orange).small());
+        } else if remotes.iter().any(|r| r.0 == n) {
+            ui.label(RichText::new("This name already exists.").color(p.orange).small());
+        } else {
+            ui.label(theme::muted(ui, format!("Folders will later be addressed as e.g. “{n}:Documents”.")).small());
+        }
+    }
+
+    /// Name and form entries are complete and valid.
+    fn entries_ok(&self) -> bool {
+        let n = self.name.trim();
+        valid_name(n) && !self.remotes().iter().any(|r| r.0 == n) && self.missing_field().is_none()
+    }
+
+    /// Input fields of a parameter-based provider (S3, WebDAV, SFTP).
+    fn form_ui(&mut self, ui: &mut Ui) {
+        let p = pal(ui);
+        let pr = &PROVIDERS[self.provider];
+        let s3_custom = pr.typ == "s3" && self.value("s3", &S3_FIELDS[0]) != "AWS";
+        egui::Grid::new(("wiz-form", pr.typ)).num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            for f in pr.fields {
+                let key = format!("{}.{}", pr.typ, f.key);
+                let required = f.required || (pr.typ == "s3" && f.key == "endpoint" && s3_custom);
+                ui.label(if required { format!("{} *", f.label) } else { f.label.to_string() });
+                if f.choices.is_empty() {
+                    let v = self.form.entry(key).or_default();
+                    let mut hint = f.hint.to_string();
+                    if pr.typ == "s3" && f.key == "endpoint" && !s3_custom {
+                        hint = "leave empty for Amazon S3".into();
+                    }
+                    ui.add(egui::TextEdit::singleline(v).password(f.secret).hint_text(hint).desired_width(360.0));
+                } else {
+                    let cur = self.value(pr.typ, f);
+                    let shown = f.choices.iter().find(|c| c.0 == cur).map_or(cur.as_str(), |c| c.1);
+                    egui::ComboBox::from_id_salt(&key).selected_text(shown).width(360.0).show_ui(ui, |ui| {
+                        for (val, label) in f.choices {
+                            if ui.selectable_label(cur == *val, *label).clicked() {
+                                self.form.insert(key.clone(), val.to_string());
+                            }
+                        }
+                    });
+                }
+                ui.end_row();
+            }
+        });
+        ui.add_space(4.0);
+        match self.missing_field() {
+            Some(l) => ui.label(RichText::new(format!("Please fill in “{l}”.")).color(p.orange).small()),
+            None => ui.label(theme::muted(ui, "Everything is saved in rclone's configuration file (passwords obscured).").small()),
+        };
     }
 
     fn login(&mut self, ui: &mut Ui, cfg: &Config) {
         let p = pal(ui);
         let pr = &PROVIDERS[self.provider];
-        ui.label(theme::bold(format!("Sign in to {}", pr.name), 22.0));
-        ui.label(theme::muted(ui, "Your browser will open. Sign in there and allow access. Then this continues automatically."));
+        if pr.is_form() {
+            ui.label(theme::bold(format!("Connect to {}", pr.name), 22.0));
+            ui.label(theme::muted(ui, "Enter the connection details (* = required). Draisine saves the connection and checks that it works."));
+        } else {
+            ui.label(theme::bold(format!("Sign in to {}", pr.name), 22.0));
+            ui.label(theme::muted(ui, "Your browser will open. Sign in there and allow access. Then this continues automatically."));
+        }
+        ui.add_space(12.0);
+        let editable = self.login_job.is_none() && !matches!(self.login, Some(Ok(())));
+        ui.add_enabled_ui(editable, |ui| {
+            self.name_ui(ui);
+            if pr.is_form() {
+                ui.add_space(8.0);
+                self.form_ui(ui);
+            }
+        });
         ui.add_space(12.0);
         match (&self.login, &self.login_job) {
             (_, Some(_)) => {
                 theme::callout(ui, p.blue, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(theme::bold("Waiting for sign-in in the browser …", 15.0));
+                        let wait = if pr.is_form() { "Connecting …" } else { "Waiting for sign-in in the browser …" };
+                        ui.label(theme::bold(wait, 15.0));
                     });
-                    ui.label(theme::muted(ui, "If no browser opened: the log contains a link you can copy."));
+                    if !pr.is_form() {
+                        ui.label(theme::muted(ui, "If no browser opened: the log contains a link you can copy."));
+                    }
                 });
                 ui.add_space(6.0);
                 if theme::secondary(ui, "Cancel").clicked() {
@@ -460,7 +638,7 @@ impl Wizard {
             (res, None) => {
                 if let Some(Err(e)) = res {
                     theme::callout(ui, p.red, |ui| {
-                        ui.label(theme::bold("Sign-in failed", 15.0).color(p.red));
+                        ui.label(theme::bold(if pr.is_form() { "Connection failed" } else { "Sign-in failed" }, 15.0).color(p.red));
                         ui.label(e.as_str());
                     });
                     ui.add_space(8.0);
@@ -473,8 +651,12 @@ impl Wizard {
                     ));
                     ui.add_space(6.0);
                 }
-                let label = if res.is_some() { "🔑  Try again" } else { "🔑  Sign in in browser" };
-                if theme::primary(ui, label).clicked() {
+                let label = match (res.is_some(), pr.is_form()) {
+                    (true, _) => "🔑  Try again",
+                    (false, true) => "🔌  Connect",
+                    (false, false) => "🔑  Sign in in browser",
+                };
+                if theme::primary_enabled(ui, self.entries_ok(), label).clicked() {
                     self.start_login(ui.ctx(), cfg);
                 }
             }
@@ -483,11 +665,16 @@ impl Wizard {
 
     fn start_login(&mut self, ctx: &egui::Context, cfg: &Config) {
         let (cfg, name, typ) = (cfg.clone(), self.name.trim().to_string(), PROVIDERS[self.provider].typ.to_string());
+        let params = PROVIDERS[self.provider].is_form().then(|| self.params());
         let child = self.child.clone();
         self.login = None;
         self.login_job = Some(Bg::spawn(ctx, move || {
             let rc = Rclone::new(&cfg).map_err(|e| e.to_string())?;
-            let c = rc.spawn_config_create(&name, &typ).map_err(|e| e.to_string())?;
+            let c = match &params {
+                Some(ps) => rc.spawn_config_create_params(&name, &typ, ps),
+                None => rc.spawn_config_create(&name, &typ),
+            }
+            .map_err(|e| e.to_string())?;
             *child.lock().unwrap() = Some(c);
             let status = loop {
                 std::thread::sleep(std::time::Duration::from_millis(250));
@@ -518,7 +705,16 @@ impl Wizard {
                 let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("cancelled").to_string();
                 return Err(last);
             }
-            rc.test_remote(&name).map_err(|e| format!("Connection created, but the test failed: {e}"))
+            match rc.test_remote(&name) {
+                Ok(()) => Ok(()),
+                // Typed-in parameters are probably wrong: remove the connection so the
+                // user can go back, correct them and create it again under the same name.
+                Err(e) if params.is_some() => {
+                    let _ = rc.run(&["config".into(), "delete".into(), name.clone()]);
+                    Err(format!("Could not connect: {e}"))
+                }
+                Err(e) => Err(format!("Connection created, but the test failed: {e}")),
+            }
         }));
     }
 

@@ -234,6 +234,18 @@ impl Rclone {
         Ok(())
     }
 
+    /// Starts `rclone config create <name> <type> key=value …` for backends configured by
+    /// plain parameters (S3, WebDAV, SFTP). `--obscure` makes rclone always obscure password
+    /// fields, even if the value happens to look already obscured.
+    pub fn spawn_config_create_params(&self, name: &str, typ: &str, params: &[(String, String)]) -> Result<std::process::Child> {
+        let mut args = vec!["config".to_string(), "create".into(), name.into(), typ.into()];
+        args.extend(params.iter().map(|(k, v)| format!("{k}={v}")));
+        args.push("--obscure".into());
+        let keys: Vec<&str> = params.iter().map(|(k, _)| k.as_str()).collect();
+        log::info(format!("rclone config create {name} {typ} ({})", keys.join(", ")));
+        Ok(self.command(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?)
+    }
+
     /// Starts `rclone config create <name> <type>` (opens the browser for OAuth providers).
     pub fn spawn_config_create(&self, name: &str, typ: &str) -> Result<std::process::Child> {
         let mut args = vec!["config".to_string(), "create".into(), name.into(), typ.into()];
