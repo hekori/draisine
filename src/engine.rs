@@ -263,6 +263,19 @@ fn save_state(pair: &Pair, st: &State) -> Result<()> {
 }
 
 /// Forget the last sync: the next two-way sync behaves like a first sync (nothing is deleted).
+/// Planning stopped because a side is unexpectedly empty or missing. Resetting the sync
+/// state (if this is intended) lets the next run continue.
+#[derive(Debug)]
+pub struct SafetyStop(pub String);
+
+impl std::fmt::Display for SafetyStop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SafetyStop {}
+
 pub fn reset_state(pair: &Pair) {
     let _ = std::fs::remove_file(state_path(pair));
     log::info(format!("[{}] Sync state reset", pair.label()));
@@ -424,7 +437,7 @@ pub fn plan_with(cfg: &Config, pair: &Pair, mode: Mode, cancel: Option<Cancel>) 
             if mode == Mode::Diff {
                 warnings.push(msg);
             } else {
-                bail!("[{}] {msg}", pair.label());
+                return Err(SafetyStop(format!("[{}] {msg}", pair.label())).into());
             }
         }
     }

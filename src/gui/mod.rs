@@ -52,7 +52,16 @@ enum Page {
     About,
 }
 
-type Plans = Vec<Result<Plan, String>>;
+type Plans = Vec<Result<Plan, PlanErr>>;
+
+/// A folder pair whose preview failed.
+struct PlanErr {
+    msg: String,
+    /// Id of the pair, if the error belongs to one.
+    pair: Option<String>,
+    /// Stopped by the empty-side safety check: offer to reset the sync state.
+    safety: bool,
+}
 type Results = Vec<Result<(String, Report), String>>;
 /// rclone version line + configured remotes (name, type).
 type RcloneInfo = Result<(String, Vec<(String, String)>), String>;
@@ -157,8 +166,8 @@ fn action_color(p: &Pal, a: Action) -> Color32 {
     match a {
         Action::DeleteLocal | Action::DeleteRemote => p.red,
         Action::OverwriteLocal | Action::OverwriteRemote | Action::Conflict | Action::Different => p.orange,
-        Action::CopyToLocal | Action::CopyToRemote => p.green,
-        Action::RenameLocal | Action::RenameRemote | Action::OnlyLocal | Action::OnlyRemote => p.blue,
+        Action::CopyToLocal | Action::CopyToRemote | Action::OnlyLocal | Action::OnlyRemote => p.green,
+        Action::RenameLocal | Action::RenameRemote => p.blue,
     }
 }
 
@@ -175,10 +184,12 @@ const GROUPS: [(Action, Side, &str, &str); 12] = [
     (Action::OverwriteLocal, Side::Local, "modify", "Replaced by the cloud version. The old version goes to the trash."),
     (Action::RenameLocal, Side::Local, "rename", "Renamed like in the cloud."),
     (Action::DeleteLocal, Side::Local, "remove", "Deleted here. The files go to the trash."),
+    (Action::OnlyLocal, Side::Local, "only here", "Exists only on this computer."),
     (Action::CopyToRemote, Side::Remote, "add", "New in the cloud (uploaded from this computer)."),
     (Action::OverwriteRemote, Side::Remote, "modify", "Replaced by this computer's version. Old version: backup folder or the provider's version history."),
     (Action::RenameRemote, Side::Remote, "rename", "Renamed like on this computer."),
     (Action::DeleteRemote, Side::Remote, "remove", "Deleted in the cloud. They go to the backup folder or the provider's trash."),
+    (Action::OnlyRemote, Side::Remote, "only here", "Exists only in the cloud."),
     (
         Action::Conflict,
         Side::Both,
@@ -186,8 +197,6 @@ const GROUPS: [(Action, Side, &str, &str); 12] = [
         "Changed on both sides. The cloud version keeps the name, yours is kept as a conflicted copy.",
     ),
     (Action::Different, Side::Both, "Different", "Same name, different content."),
-    (Action::OnlyLocal, Side::Both, "Only on this computer", ""),
-    (Action::OnlyRemote, Side::Both, "Only in the cloud", ""),
 ];
 
 fn mode_title(m: Mode) -> &'static str {
@@ -326,7 +335,8 @@ impl App {
         self.in_sync = None;
         self.syncing = if mode == Mode::TwoWay { pairs.iter().map(|p| p.id.clone()).collect() } else { Vec::new() };
         if pairs.is_empty() {
-            self.job = Job::Review(mode, vec![Err("No active folder pair. Add one in the overview.".into())]);
+            let msg = "No active folder pair. Add one in the overview.".into();
+            self.job = Job::Review(mode, vec![Err(PlanErr { msg, pair: None, safety: false })]);
             return;
         }
         self.job = Job::Planning(mode);
@@ -337,12 +347,13 @@ impl App {
         self.plans_job = Some(Bg::spawn(ctx, move || {
             // Lets the tray show ↻ while we compare; released when this closure returns.
             let _sync_lock = ipc::hold_sync_lock();
-            let plans: Vec<Result<Plan, String>> = pairs
+            let plans: Plans = pairs
                 .iter()
                 .map(|p| {
                     engine::plan_with(&cfg, p, mode, Some(cancel.clone())).map_err(|e| {
                         log::error(format!("[{}] Preview failed: {e:#}", p.label()));
-                        format!("{e:#}")
+                        let safety = e.downcast_ref::<engine::SafetyStop>().is_some();
+                        PlanErr { msg: format!("{e:#}"), pair: Some(p.id.clone()), safety }
                     })
                 })
                 .collect();
@@ -939,6 +950,7 @@ impl App {
         let view = if mode == Mode::Diff { preview::View::Changes } else { *view };
         ui.add_space(4.0);
 
+        let mut reset = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for plan in plans.iter_mut() {
                 let plan = match plan {
@@ -946,7 +958,18 @@ impl App {
                     Err(e) => {
                         theme::callout(ui, p.red, |ui| {
                             ui.label(theme::bold("Comparison failed", 15.0).color(p.red));
-                            ui.label(e.as_str());
+                            ui.label(e.msg.as_str());
+                            if e.safety
+                                && let Some(id) = &e.pair
+                            {
+                                ui.add_space(6.0);
+                                if theme::secondary(ui, "↺  Reset sync state and compare again")
+                                    .on_hover_text("Forgets the last sync. The next sync behaves like the first one: nothing is deleted.")
+                                    .clicked()
+                                {
+                                    reset = Some(id.clone());
+                                }
+                            }
                         });
                         ui.add_space(6.0);
                         continue;
@@ -978,6 +1001,24 @@ impl App {
                 ui.add_space(8.0);
             }
         });
+        if let Some(id) = reset {
+            let ids: Vec<String> = plans
+                .iter()
+                .filter_map(|x| match x {
+                    Ok(pl) => Some(pl.pair.id.clone()),
+                    Err(e) => e.pair.clone(),
+                })
+                .collect();
+            if let Some(pair) = self.cfg.pairs.iter_mut().find(|p| p.id == id) {
+                engine::reset_state(pair);
+                log::info(format!("[{}] Sync state reset", pair.label()));
+                if pair.auto_sync {
+                    pair.auto_sync = false; // needs a manual sync again
+                    self.save();
+                }
+            }
+            self.start_plan(&ui.ctx().clone(), mode, Some(ids));
+        }
     }
 
     fn confirm_modal(&mut self, ctx: &egui::Context) {

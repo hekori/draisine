@@ -2,3 +2,4 @@
 /dist
 draisine-data/
 /.cargo/config.toml
+.env

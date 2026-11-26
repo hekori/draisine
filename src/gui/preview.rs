@@ -116,8 +116,9 @@ impl Cell {
     fn plain(p: &Pal, name: &str, e: Option<Entry>, note: impl Into<String>) -> Cell {
         Cell { marker: "", name: name.into(), meta: meta(e), note: note.into(), color: p.text, strike: false, dim: false }
     }
-    fn gone(p: &Pal, name: &str, note: impl Into<String>) -> Cell {
-        Cell { marker: "", name: name.into(), meta: String::new(), note: note.into(), color: p.muted, strike: true, dim: true }
+    /// The side where the file does not exist: no name, only a short note.
+    fn gone(p: &Pal, note: impl Into<String>) -> Cell {
+        Cell { marker: "", name: String::new(), meta: String::new(), note: note.into(), color: p.muted, strike: false, dim: true }
     }
     fn mark(marker: &'static str, color: Color32, name: &str, e: Option<Entry>, note: impl Into<String>) -> Cell {
         Cell { marker, name: name.into(), meta: meta(e), note: note.into(), color, strike: false, dim: false }
@@ -203,10 +204,10 @@ fn cells(p: &Pal, it: &Item, mode: Mode, first_sync: bool, lines: Option<(usize,
         ),
         Action::DeleteLocal => (
             target(Cell { strike: true, ..Cell::mark("", p.red, path, it.local, if sel { "will be deleted · moves to the trash" } else { keep }) }),
-            Cell::gone(p, path, if two { rn("") } else { "not in the cloud".into() }),
+            Cell::gone(p, if two { rn("") } else { "not in the cloud".into() }),
         ),
         Action::DeleteRemote => (
-            Cell::gone(p, path, if two { ln("") } else { "not on this computer".into() }),
+            Cell::gone(p, if two { ln("") } else { "not on this computer".into() }),
             target(Cell { strike: true, ..Cell::mark("", p.red, path, it.remote, if sel { "will be deleted · kept in backup / provider's trash" } else { keep }) }),
         ),
         Action::RenameLocal => {
@@ -229,9 +230,12 @@ fn cells(p: &Pal, it: &Item, mode: Mode, first_sync: bool, lines: Option<(usize,
             let (l, r) = if sel { (format!("changed here too · kept as “{copy}”"), "changed here too · keeps the name".to_string()) } else { (keep.into(), keep.into()) };
             (Cell::mark("⚠", p.orange, path, it.local, l), Cell::mark("⚠", p.orange, path, it.remote, r))
         }
-        Action::Different => (Cell::mark("≠", p.orange, path, it.local, ""), Cell::mark("≠", p.orange, path, it.remote, "")),
-        Action::OnlyLocal => (Cell::plain(p, path, it.local, ""), Cell::gone(p, path, "not in the cloud")),
-        Action::OnlyRemote => (Cell::gone(p, path, "not on this computer"), Cell::plain(p, path, it.remote, "")),
+        Action::OnlyLocal => (Cell::mark("+", p.green, path, it.local, "only on this computer"), Cell::gone(p, "does not exist in the cloud")),
+        Action::OnlyRemote => (Cell::gone(p, "does not exist on this computer"), Cell::mark("+", p.green, path, it.remote, "only in the cloud")),
+        Action::Different => (
+            Cell::mark("~", p.orange, path, it.local, "differs from the cloud"),
+            Cell::mark("~", p.orange, path, it.remote, "differs from this computer"),
+        ),
     }
 }
 
