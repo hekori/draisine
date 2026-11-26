@@ -11,6 +11,21 @@ Tray app for safely syncing local folders with Google Drive, OneDrive, Dropbox a
 A single executable, no installation. The release archive ships the matching rclone right next to it.
 Linux (KDE, GNOME with the AppIndicator extension, …), Windows, macOS.
 
+## Installation
+
+Download the archive for your system from the [releases](https://github.com/hekori/draisine/releases/latest), unpack it and start `draisine`.
+
+**Arch Linux:** add the Draisine repository to `/etc/pacman.conf`:
+
+```ini
+[draisine]
+SigLevel = Optional TrustAll
+Server = https://github.com/hekori/draisine/releases/download/arch-repo
+```
+
+then install with `sudo pacman -Sy draisine` (or `yay -S draisine`); updates come with `pacman -Syu`. rclone is installed as a dependency.
+Alternatively, build it yourself from the PKGBUILD: `git clone https://github.com/hekori/draisine && cd draisine/packaging/aur && makepkg -si`.
+
 ## Safety model
 
 | Situation | Behaviour |

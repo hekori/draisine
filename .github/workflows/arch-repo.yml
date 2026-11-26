@@ -1,0 +1,103 @@
+# Builds the Arch package from packaging/aur/PKGBUILD and publishes it as a pacman repository
+# on the GitHub release "arch-repo". Users add to /etc/pacman.conf:
+#
+#   [draisine]
+#   SigLevel = Optional TrustAll        # or Required, once packages are signed (see below)
+#   Server = https://github.com/hekori/draisine/releases/download/arch-repo
+#
+# and then: yay -S draisine  (or sudo pacman -Sy draisine)
+#
+# Signing (optional): set the secrets ARCH_GPG_PRIVATE_KEY (ASCII-armoured, without passphrase)
+# and ARCH_GPG_KEY_ID. Without them the packages are published unsigned.
+
+name: arch-repo
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, e.g. v0.1.1"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arch-repo
+  cancel-in-progress: false
+
+jobs:
+  arch-repo:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      REPO_RELEASE: arch-repo
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY_ID: ${{ secrets.ARCH_GPG_KEY_ID }}
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git rust pacman-contrib github-cli
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Prepare PKGBUILD for this tag
+        run: |
+          git config --global --add safe.directory "$PWD"
+          pkgver="${TAG#v}"
+          useradd -m builder
+          mkdir /build
+          cp packaging/aur/PKGBUILD /build/
+          sed -i "s/^pkgver=.*/pkgver=$pkgver/; s/^pkgrel=.*/pkgrel=1/" /build/PKGBUILD
+          chown -R builder: /build
+          cd /build && sudo -u builder updpkgsums
+          grep -E '^(pkgver|pkgrel|sha256sums)=' PKGBUILD
+
+      - name: Import signing key
+        if: env.KEY_ID != ''
+        env:
+          ARCH_GPG_PRIVATE_KEY: ${{ secrets.ARCH_GPG_PRIVATE_KEY }}
+        run: printf '%s\n' "$ARCH_GPG_PRIVATE_KEY" | sudo -u builder gpg --batch --import
+
+      - name: Build package and repository database
+        env:
+          DRAISINE_DROPBOX_APP_KEY: ${{ secrets.DRAISINE_DROPBOX_APP_KEY }}
+          DRAISINE_DROPBOX_APP_SECRET: ${{ secrets.DRAISINE_DROPBOX_APP_SECRET }}
+        run: |
+          cd /build
+          sign=()
+          [[ -n "$KEY_ID" ]] && sign=(--sign --key "$KEY_ID")
+          sudo -u builder --preserve-env=DRAISINE_DROPBOX_APP_KEY,DRAISINE_DROPBOX_APP_SECRET \
+            makepkg --noconfirm --nodeps "${sign[@]}"
+          mkdir /repo
+          cp draisine-*.pkg.tar.zst* /repo/
+          chown -R builder: /repo
+          cd /repo
+          sudo -u builder repo-add "${sign[@]}" draisine.db.tar.gz draisine-*.pkg.tar.zst
+          # repo-add makes draisine.db/.files symlinks; release assets must be real files.
+          for f in draisine.db draisine.files; do
+            cp --remove-destination "$(readlink -f "$f")" "$f"
+            [[ -L "$f.sig" ]] && cp --remove-destination "$(readlink -f "$f.sig")" "$f.sig"
+          done
+          rm -f ./*.old ./*.old.sig
+          ls -la
+
+      - name: Publish to the arch-repo release
+        run: |
+          if ! gh release view "$REPO_RELEASE" >/dev/null 2>&1; then
+            gh release create "$REPO_RELEASE" --target "$GITHUB_SHA" --latest=false \
+              --title "Arch Linux repository" \
+              --notes "pacman repository for Draisine. Not a regular release; see packaging/aur or the README."
+          fi
+          cd /repo
+          gh release upload "$REPO_RELEASE" --clobber ./*
+          # Remove packages of older versions, they are no longer in the database.
+          keep=$(ls)
+          gh release view "$REPO_RELEASE" --json assets -q '.assets[].name' | while read -r a; do
+            grep -qxF "$a" <<<"$keep" || gh release delete-asset "$REPO_RELEASE" "$a" --yes
+          done
