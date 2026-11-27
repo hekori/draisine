@@ -102,6 +102,8 @@ struct App {
     log_text: String,
     log_loaded: Instant,
     last_poll: Instant,
+    /// Start at login, as registered in the OS; the error of the last attempt to change it.
+    autostart: (bool, Option<String>),
     rinfo: Option<RcloneInfo>,
     rinfo_job: Option<Bg<RcloneInfo>>,
     tests: HashMap<String, Result<(), String>>,
@@ -241,6 +243,7 @@ impl App {
             log_text: String::new(),
             log_loaded: Instant::now() - Duration::from_secs(60),
             last_poll: Instant::now(),
+            autostart: (crate::autostart::is_enabled(), None),
             rinfo: None,
             rinfo_job: None,
             tests: HashMap::new(),
@@ -1374,6 +1377,23 @@ impl App {
         let p = pal(ui);
         theme::page_header(ui, "Settings", "Changes are saved immediately");
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            theme::card(ui, |ui| {
+                ui.label(theme::bold("Startup", 16.0));
+                ui.horizontal(|ui| {
+                    let mut on = self.autostart.0;
+                    if theme::toggle(ui, &mut on).changed() {
+                        self.autostart = match crate::autostart::set(on) {
+                            Ok(()) => (crate::autostart::is_enabled(), None),
+                            Err(e) => (crate::autostart::is_enabled(), Some(format!("{e:#}"))),
+                        };
+                    }
+                    ui.label("Start Draisine in the tray when I log in");
+                });
+                if let Some(e) = &self.autostart.1 {
+                    ui.label(RichText::new(format!("✖  {e}")).color(p.red));
+                }
+            });
+            ui.add_space(6.0);
             theme::card(ui, |ui| {
                 ui.label(theme::bold("Safety", 16.0));
                 ui.horizontal(|ui| {

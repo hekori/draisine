@@ -1,6 +1,7 @@
 // No console window on Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod autostart;
 mod config;
 mod desktop;
 mod engine;
@@ -34,6 +35,7 @@ fn main() {
         return;
     }
     desktop::ensure();
+    autostart::refresh();
     let result = if args.first().map(String::as_str) == Some("--window") {
         let action = args.get(1).and_then(|a| Mode::from_arg(a));
         gui::run(action)
