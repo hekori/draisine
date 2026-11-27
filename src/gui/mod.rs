@@ -116,6 +116,9 @@ struct App {
     in_sync: Option<(Vec<String>, Instant)>,
     /// Show/action request from the tray, see [`raise`].
     request: raise::Watcher,
+    /// The pairs of the current preview with the mode each is planned in (for “Check again”),
+    /// and whether it is checked inline on the overview.
+    run: (Vec<(String, Mode)>, bool),
 }
 
 /// How long the “Everything in sync” note stays on a card (the last second fades out).
@@ -249,6 +252,7 @@ impl App {
             syncing: Vec::new(),
             in_sync: None,
             request: raise::watch(&cc.egui_ctx, cc),
+            run: (Vec::new(), false),
         };
         app.load_rinfo(&cc.egui_ctx);
         #[cfg(debug_assertions)]
@@ -272,17 +276,28 @@ impl App {
         if review {
             app.start_review(&cc.egui_ctx);
         } else if let Some(m) = action {
-            app.start_plan(&cc.egui_ctx, m, None);
+            app.start_action(&cc.egui_ctx, m);
         }
         app
     }
 
-    /// Two-way preview of the pairs with deletes/overwrites waiting for confirmation.
+    /// Preview (each pair in its own direction) of the pairs with deletes/overwrites waiting for
+    /// confirmation.
     fn start_review(&mut self, ctx: &egui::Context) {
         let ids: Vec<String> =
             self.cfg.pairs.iter().filter(|p| engine::load_state(p).pending.total() > 0).map(|p| p.id.clone()).collect();
         if !ids.is_empty() {
-            self.start_plan(ctx, Mode::TwoWay, Some(ids));
+            self.start_sync(ctx, Some(ids));
+        }
+    }
+
+    /// An action requested by the tray or the command line: “twoway” is the tray's “Sync all”,
+    /// which syncs every pair in its own direction.
+    fn start_action(&mut self, ctx: &egui::Context, m: Mode) {
+        if m == Mode::TwoWay {
+            self.start_sync(ctx, None);
+        } else {
+            self.start_plan(ctx, m, None);
         }
     }
 
@@ -309,21 +324,46 @@ impl App {
         }));
     }
 
-    /// Plans `mode` for the given pairs (None = all active pairs).
+    fn pairs_of(&self, ids: Option<&[String]>) -> Vec<Pair> {
+        self.cfg.pairs.iter().filter(|p| ids.is_none_or(|ids| ids.contains(&p.id))).cloned().collect()
+    }
+
+    /// Plans `mode` for the given pairs (None = all pairs).
     fn start_plan(&mut self, ctx: &egui::Context, mode: Mode, ids: Option<Vec<String>>) {
+        let pairs = self.pairs_of(ids.as_deref()).into_iter().map(|p| (p, mode)).collect();
+        self.plan_pairs(ctx, mode, pairs, false);
+    }
+
+    /// “Sync”: plans each of the given pairs (None = all) in its own direction, checked inline
+    /// on the overview.
+    fn start_sync(&mut self, ctx: &egui::Context, ids: Option<Vec<String>>) {
+        let pairs: Vec<(Pair, Mode)> = self.pairs_of(ids.as_deref()).into_iter().map(|p| (p.clone(), p.direction())).collect();
+        // The preview's title: the common direction, or plain “Sync” when they differ.
+        let mode = match pairs.first() {
+            Some((_, m)) if pairs.iter().all(|(_, d)| d == m) => *m,
+            _ => Mode::TwoWay,
+        };
+        self.plan_pairs(ctx, mode, pairs, true);
+    }
+
+    /// Plans the current run again for the given pairs, each in the same mode as before.
+    fn rerun(&mut self, ctx: &egui::Context, mode: Mode, ids: &[String]) {
+        let (run, inline) = self.run.clone();
+        let pairs = run
+            .iter()
+            .filter(|(id, _)| ids.contains(id))
+            .filter_map(|(id, m)| self.cfg.pairs.iter().find(|p| &p.id == id).map(|p| (p.clone(), *m)))
+            .collect();
+        self.plan_pairs(ctx, mode, pairs, inline);
+    }
+
+    /// Plans each pair in its mode; `mode` names the whole run (titles). `inline`: the overview
+    /// stays and the cards show a spinner instead of a progress screen.
+    fn plan_pairs(&mut self, ctx: &egui::Context, mode: Mode, pairs: Vec<(Pair, Mode)>, inline: bool) {
         if self.busy() {
             return;
         }
-        let pairs: Vec<Pair> = self
-            .cfg
-            .pairs
-            .iter()
-            .filter(|p| match &ids {
-                Some(ids) => ids.contains(&p.id),
-                None => true,
-            })
-            .cloned()
-            .collect();
+        self.run = (pairs.iter().map(|(p, m)| (p.id.clone(), *m)).collect(), inline);
         self.page = Page::Overview;
         self.wizard = None;
         self.confirm = false;
@@ -333,7 +373,7 @@ impl App {
         self.show_same = false;
         self.diffs.clear();
         self.in_sync = None;
-        self.syncing = if mode == Mode::TwoWay { pairs.iter().map(|p| p.id.clone()).collect() } else { Vec::new() };
+        self.syncing = if inline { pairs.iter().map(|(p, _)| p.id.clone()).collect() } else { Vec::new() };
         if pairs.is_empty() {
             let msg = "No active folder pair. Add one in the overview.".into();
             self.job = Job::Review(mode, vec![Err(PlanErr { msg, pair: None, safety: false })]);
@@ -349,8 +389,8 @@ impl App {
             let _sync_lock = ipc::hold_sync_lock();
             let plans: Plans = pairs
                 .iter()
-                .map(|p| {
-                    engine::plan_with(&cfg, p, mode, Some(cancel.clone())).map_err(|e| {
+                .map(|(p, m)| {
+                    engine::plan_with(&cfg, p, *m, Some(cancel.clone())).map_err(|e| {
                         log::error(format!("[{}] Preview failed: {e:#}", p.label()));
                         let safety = e.downcast_ref::<engine::SafetyStop>().is_some();
                         PlanErr { msg: format!("{e:#}"), pair: Some(p.id.clone()), safety }
@@ -358,11 +398,11 @@ impl App {
                 })
                 .collect();
             if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                // First two-way sync of a pair that is already identical: nothing to apply, but the
-                // state must still be recorded, otherwise it counts as never synced (no auto-sync).
+                // First sync of a pair that is already identical: nothing to apply, but the state
+                // must still be recorded, otherwise it counts as never synced (no auto-sync).
                 for p in plans.iter().flatten() {
                     engine::record_pending(&cfg, p); // keeps the overview's “waiting” note current
-                    if mode == Mode::TwoWay
+                    if p.mode == p.pair.direction()
                         && p.count(|i| i.action.executable()) == 0
                         && !engine::has_synced(&p.pair)
                         && let Err(e) = engine::execute(&cfg, p, &mut |_| {})
@@ -441,7 +481,7 @@ impl App {
                     self.confirm = true;
                 }
                 let ids = std::mem::take(&mut self.syncing);
-                let nothing_to_do = m == Mode::TwoWay
+                let nothing_to_do = !ids.is_empty()
                     && plans.iter().all(|p| p.as_ref().is_ok_and(|p| p.count(|i| i.action.executable()) == 0));
                 if nothing_to_do {
                     // No preview screen: just a short note on the overview cards.
@@ -486,7 +526,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 if let Some(m) = action {
-                    self.start_plan(ctx, m, None);
+                    self.start_action(ctx, m);
                 }
             }
             Some(raise::Request::Review) => {
@@ -540,8 +580,8 @@ impl App {
     fn overview(&mut self, ui: &mut Ui) {
         let p = pal(ui);
         match &self.job {
-            // A two-way sync is checked inline: the overview stays, the cards show a spinner.
-            Job::Planning(Mode::TwoWay) => {}
+            // A sync is checked inline: the overview stays, the cards show a spinner.
+            Job::Planning(_) if !self.syncing.is_empty() => {}
             Job::Planning(m) => {
                 theme::page_header(ui, mode_title(*m), "");
                 theme::card(ui, |ui| {
@@ -617,8 +657,11 @@ impl App {
         let in_sync_ids = self.in_sync.as_ref().map(|x| x.0.clone()).unwrap_or_default();
         let mut cancel_sync = false;
         ui.horizontal(|ui| {
-            if theme::primary_enabled(ui, any_enabled, "↔  Sync all").clicked() {
-                self.start_plan(&ctx, Mode::TwoWay, None);
+            if theme::primary_enabled(ui, any_enabled, "↔  Sync all")
+                .on_hover_text("Syncs every folder pair in its own direction")
+                .clicked()
+            {
+                self.start_sync(&ctx, None);
             }
             if theme::secondary_enabled(ui, any_enabled, "🔍  Compare all").clicked() {
                 self.start_plan(&ctx, Mode::Diff, None);
@@ -637,7 +680,8 @@ impl App {
         };
         let cfg_snapshot = self.cfg.clone();
         let next_checks = ipc::next_checks();
-        let mut action: Option<(Mode, String)> = None;
+        // (None = “Sync” in the pair's own direction, or a one-off mode, pair id)
+        let mut action: Option<(Option<Mode>, String)> = None;
         let (mut toggled, mut save_edit, mut cancel_edit) = (false, false, false);
         let (mut start_edit, mut reset) = (None, None);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -651,14 +695,19 @@ impl App {
                         ui.label(theme::bold(pair.label(), 17.0));
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                             let id = pair.id.clone();
+                            let dir = pair.direction();
                             ui.menu_button(RichText::new("•••").size(13.0), |ui| {
                                 for (m, label, hint) in [
                                     (Mode::Diff, "🔍  Compare", "Only show differences, change nothing"),
+                                    (Mode::TwoWay, "↔  Sync both ways once", "Two-way, just this once: take over changes from both sides"),
                                     (Mode::Pull, "Sync cloud ➡ this computer", "One-way: this computer becomes a mirror of the cloud"),
                                     (Mode::Push, "Sync this computer ➡ cloud", "One-way: the cloud becomes a mirror of this computer"),
                                 ] {
+                                    if m == dir {
+                                        continue; // that is what “Sync” does
+                                    }
                                     if ui.button(label).on_hover_text(hint).clicked() {
-                                        action = Some((m, id.clone()));
+                                        action = Some((Some(m), id.clone()));
                                         ui.close();
                                     }
                                 }
@@ -687,6 +736,10 @@ impl App {
                     });
                     theme::path_line(ui, "💻", &pair.local);
                     theme::path_line(ui, "☁", &pair.remote);
+                    if pair.direction() != Mode::TwoWay {
+                        ui.label(RichText::new(direction_text(pair.direction()).0).size(13.0).color(p.accent))
+                            .on_hover_text(direction_text(pair.direction()).1);
+                    }
                     if !pair.excludes.is_empty() {
                         ui.label(theme::muted(ui, format!("Excluded: {}", pair.excludes.join(", "))).small());
                     }
@@ -723,10 +776,10 @@ impl App {
                                 );
                                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                                     if theme::secondary_enabled(ui, !busy, "Review …")
-                                        .on_hover_text("Show the two-way preview: nothing is changed until you confirm.")
+                                        .on_hover_text("Show the preview: nothing is changed until you confirm.")
                                         .clicked()
                                     {
-                                        action = Some((Mode::TwoWay, pair.id.clone()));
+                                        action = Some((None, pair.id.clone()));
                                     }
                                 });
                             });
@@ -746,18 +799,14 @@ impl App {
                         });
                     } else {
                         ui.horizontal(|ui| {
-                            if theme::primary_enabled(ui, !busy, "↔  Sync")
-                                .on_hover_text("Two-way sync: take over changes from both sides")
-                                .clicked()
-                            {
-                                action = Some((Mode::TwoWay, pair.id.clone()));
+                            let (label, hint) = sync_button(pair.direction());
+                            if theme::primary_enabled(ui, !busy, label).on_hover_text(hint).clicked() {
+                                action = Some((None, pair.id.clone()));
                             }
                             // Auto-sync is offered only once the pair has been synced by hand.
                             if synced {
                                 ui.add_space(16.0);
-                                let hint = "Hands-free two-way sync in the background: new, changed and deleted files are taken over \
-                                            on their own whenever it is clear which side changed since the last sync. \
-                                            Anything unclear waits for your OK.";
+                                let hint = auto_sync_hint(pair.direction());
                                 let r = ui.add_enabled_ui(!busy, |ui| theme::toggle(ui, &mut pair.auto_sync)).inner;
                                 if r.on_hover_text(hint).changed() {
                                     log::info(format!("[{}] Auto-sync {}", pair.label(), if pair.auto_sync { "on" } else { "off" }));
@@ -829,10 +878,11 @@ impl App {
             }
             self.flash("Sync state reset");
         }
-        if let Some((m, id)) = action
-            && !busy
-        {
-            self.start_plan(&ctx, m, Some(vec![id]));
+        match action {
+            _ if busy => {}
+            Some((Some(m), id)) => self.start_plan(&ctx, m, Some(vec![id])),
+            Some((None, id)) => self.start_sync(&ctx, Some(vec![id])),
+            None => {}
         }
     }
 
@@ -856,8 +906,11 @@ impl App {
             }
             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                 if mode == Mode::Diff {
-                    if theme::primary_enabled(ui, total > 0, "↔  Sync now …").clicked() {
-                        self.start_plan(&ctx, Mode::TwoWay, Some(ids.clone()));
+                    if theme::primary_enabled(ui, total > 0, "↔  Sync now …")
+                        .on_hover_text("Syncs each folder pair in its own direction")
+                        .clicked()
+                    {
+                        self.start_sync(&ctx, Some(ids.clone()));
                     }
                     if theme::secondary(ui, "Close").clicked() {
                         self.job = Job::None;
@@ -872,7 +925,7 @@ impl App {
                         }
                     }
                     if theme::secondary(ui, "⟳  Check again").clicked() {
-                        self.start_plan(&ctx, mode, Some(ids.clone()));
+                        self.rerun(&ctx, mode, &ids);
                     }
                     if theme::link(ui, "Cancel").clicked() {
                         self.job = Job::None;
@@ -994,7 +1047,10 @@ impl App {
                     }
                     ui.add_space(8.0);
                     match view {
-                        preview::View::Changes => preview::changes(ui, &p, cfg, plan, mode, &f, diffs),
+                        preview::View::Changes => {
+                            let m = plan.mode;
+                            preview::changes(ui, &p, cfg, plan, m, &f, diffs)
+                        }
                         preview::View::Result => preview::result(ui, &p, plan, &f, show_same),
                     }
                 });
@@ -1017,7 +1073,7 @@ impl App {
                     self.save();
                 }
             }
-            self.start_plan(&ui.ctx().clone(), mode, Some(ids));
+            self.rerun(&ui.ctx().clone(), mode, &ids);
         }
     }
 
@@ -1484,6 +1540,8 @@ fn edit_form(ui: &mut Ui, p: &Pal, ed: &mut Edit, pair: &Pair, remotes: &[String
             ed.browser.ui(ui, cfg, 180.0);
             d.remote = ed.browser.full();
         }
+        field(ui, "Direction");
+        direction_picker(ui, &mut d.direction);
         egui::CollapsingHeader::new("Advanced").default_open(false).show(ui, |ui| {
             field(ui, "Backup folder in the cloud (optional)");
             ui.add(
@@ -1500,7 +1558,7 @@ fn edit_form(ui: &mut Ui, p: &Pal, ed: &mut Edit, pair: &Pair, remotes: &[String
         });
         if d.signature() != pair.signature() {
             theme::callout(ui, p.blue, |ui| {
-                ui.label(RichText::new("ℹ  Folders or excludes changed: the next sync behaves like a first sync (nothing is deleted). Auto-sync is turned off until then.").size(13.0));
+                ui.label(RichText::new("ℹ  Folders, excludes or direction changed: the next sync behaves like a first sync (nothing is deleted). Auto-sync is turned off until then.").size(13.0));
             });
         }
         ui.add_space(6.0);
@@ -1611,13 +1669,96 @@ fn next_check_text(at: u64) -> String {
 /// Shown while auto-sync is on: it changes and deletes files without asking, and how that is
 /// kept safe.
 fn auto_sync_note(pair: &Pair) -> String {
-    let safety = if pair.remote_backup.trim().is_empty() {
-        "Replaced or deleted local files go to the trash. Tip: set a backup folder (Edit) to keep old cloud versions too."
-    } else {
-        "Replaced or deleted files are kept: local ones in the trash, cloud ones in the backup folder."
-    };
-    format!(
-        "✨  Auto-sync works for you: it copies, updates and deletes files on both sides on its own, \
-         whenever it is clear which side changed. {safety} Anything unclear waits for your OK."
-    )
+    let backup = !pair.remote_backup.trim().is_empty();
+    match pair.direction() {
+        Mode::Pull => "✨  Auto-sync keeps this computer a copy of the cloud: new and changed cloud files are \
+                       downloaded, files deleted in the cloud are deleted here too. Replaced or deleted local \
+                       files go to the trash. Files you add or change here are never removed or replaced \
+                       without your OK."
+            .into(),
+        Mode::Push => {
+            let safety = if backup {
+                "Replaced or deleted cloud files are kept in the backup folder."
+            } else {
+                "Replaced or deleted cloud files go to the provider's trash or version history. Tip: set a \
+                 backup folder (Edit) to keep them yourself."
+            };
+            format!(
+                "✨  Auto-sync keeps the cloud a copy of this computer: new and changed files are uploaded, \
+                 files deleted here are deleted in the cloud too. {safety} Files added or changed in the cloud \
+                 are never removed or replaced without your OK."
+            )
+        }
+        _ => {
+            let safety = if backup {
+                "Replaced or deleted files are kept: local ones in the trash, cloud ones in the backup folder."
+            } else {
+                "Replaced or deleted local files go to the trash. Tip: set a backup folder (Edit) to keep old cloud versions too."
+            };
+            format!(
+                "✨  Auto-sync works for you: it copies, updates and deletes files on both sides on its own, \
+                 whenever it is clear which side changed. {safety} Anything unclear waits for your OK."
+            )
+        }
+    }
+}
+
+/// Hover text of the auto-sync switch.
+fn auto_sync_hint(d: Mode) -> &'static str {
+    match d {
+        Mode::Pull => "Hands-free one-way sync in the background: new, changed and deleted cloud files are taken \
+                       over on this computer whenever the copy here is untouched since the last sync. \
+                       Anything unclear waits for your OK.",
+        Mode::Push => "Hands-free one-way sync in the background: new, changed and deleted files on this computer \
+                       are taken over in the cloud whenever the cloud copy is untouched since the last sync. \
+                       Anything unclear waits for your OK.",
+        _ => "Hands-free two-way sync in the background: new, changed and deleted files are taken over \
+              on their own whenever it is clear which side changed since the last sync. \
+              Anything unclear waits for your OK.",
+    }
+}
+
+/// The “Sync” button of a pair: label and hover text.
+fn sync_button(d: Mode) -> (&'static str, &'static str) {
+    match d {
+        Mode::Pull => ("⬅  Sync from cloud", "One-way sync: this computer becomes a copy of the cloud"),
+        Mode::Push => ("➡  Sync to cloud", "One-way sync: the cloud becomes a copy of this computer"),
+        _ => ("↔  Sync", "Two-way sync: take over changes from both sides"),
+    }
+}
+
+/// The directions a pair can have: (direction, title, explanation).
+const DIRECTIONS: [(Mode, &str, &str); 3] = [
+    (Mode::TwoWay, "↔  Two-way", "Changes on this computer and in the cloud are taken over to the other side."),
+    (
+        Mode::Pull,
+        "⬅  One-way: cloud ➡ this computer",
+        "This computer becomes a copy of the cloud. Files you add or change here are not uploaded; \
+         the sync offers to remove or replace them.",
+    ),
+    (
+        Mode::Push,
+        "➡  One-way: this computer ➡ cloud",
+        "The cloud becomes a copy of this computer, e.g. as a backup. Files added or changed in the cloud \
+         are not downloaded; the sync offers to remove or replace them.",
+    ),
+];
+
+/// (title, explanation) of a direction.
+pub(crate) fn direction_text(d: Mode) -> (&'static str, &'static str) {
+    DIRECTIONS.iter().find(|x| x.0 == d).map_or(("", ""), |x| (x.1, x.2))
+}
+
+/// Picks a pair's direction; shows what the chosen one does.
+pub(crate) fn direction_picker(ui: &mut Ui, d: &mut Mode) {
+    if !DIRECTIONS.iter().any(|x| x.0 == *d) {
+        *d = Mode::TwoWay;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (m, title, desc) in DIRECTIONS {
+            ui.radio_value(d, m, title).on_hover_text(desc);
+            ui.add_space(8.0);
+        }
+    });
+    ui.label(theme::muted(ui, direction_text(*d).1).small());
 }

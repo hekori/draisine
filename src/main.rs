@@ -19,6 +19,7 @@ Usage:
   draisine                         Start the tray (default)
   draisine --window [ACTION]       Open the window, optionally with a preview for ACTION
                                    ACTION: diff | pull | push | twoway
+                                   (twoway = sync every folder pair in its own direction)
   draisine --version | --help
 ";
 

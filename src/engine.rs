@@ -220,13 +220,13 @@ fn waiting<'a>(cfg: &Config, pair: &Pair, st: &State, items: impl Iterator<Item 
     Pending::of(items.filter(|i| !(auto && auto_safe(i, st))))
 }
 
-/// Records that the pair was just checked, and remembers what a two-way plan would delete or
-/// overwrite, so the overview and the tray can point the user to it. Other modes say nothing
-/// about two-way and leave the pending note alone.
+/// Records that the pair was just checked, and remembers what a plan in the pair's own direction
+/// would delete or overwrite, so the overview and the tray can point the user to it. Other modes
+/// say nothing about what “Sync” would do and leave the pending note alone.
 pub fn record_pending(cfg: &Config, plan: &Plan) {
     let mut st = load_state(&plan.pair);
     st.last_check = Some(now_stamp());
-    if plan.mode == Mode::TwoWay {
+    if plan.mode == plan.pair.direction() {
         st.pending = waiting(cfg, &plan.pair, &st, plan.items.iter());
     }
     if let Err(e) = save_state(&plan.pair, &st) {
@@ -872,10 +872,10 @@ pub fn execute(cfg: &Config, planned: &Plan, progress: &mut dyn FnMut(&str)) -> 
     st.last_sync = Some(now_stamp());
     st.last_check = st.last_sync.clone();
     st.last_result = format!("{}: {}", planned.mode.label(), report.summary());
-    // What is still waiting: two-way deletes/overwrites that were not selected. A one-way sync
-    // changes the baseline, so the next two-way run will tell.
+    // What is still waiting: deletes/overwrites in the pair's own direction that were not
+    // selected. A sync in another direction changes the baseline, so the next “Sync” will tell.
     let applied: HashSet<(&str, Action)> = selected.iter().map(|i| (i.path.as_str(), i.action)).collect();
-    st.pending = if planned.mode == Mode::TwoWay {
+    st.pending = if planned.mode == pair.direction() {
         waiting(cfg, pair, &st, fresh.items.iter().filter(|i| !applied.contains(&(i.path.as_str(), i.action))))
     } else {
         Pending::default()
@@ -934,7 +934,7 @@ pub fn auto_sync_active(pair: &Pair) -> bool {
     pair.auto_sync && has_synced(pair)
 }
 
-/// Whether auto-sync may apply this two-way item without asking. Non-destructive actions always
+/// Whether auto-sync may apply this item (two-way or one-way) without asking. Non-destructive actions always
 /// can. A delete or overwrite only when it is clear which side leads and the other side is exactly
 /// as the sync history recorded it:
 /// - the file was in sync at the last sync (recorded on both sides),
@@ -962,14 +962,15 @@ pub fn auto_safe(it: &Item, st: &State) -> bool {
     it.selected && dst_now == Some(dst_rec) && leading_ok
 }
 
-/// Unattended two-way sync: executes new files, conflicts (keeping both versions) and the deletes
-/// and overwrites that pass [`auto_safe`]. Returns (report, number of deletes/overwrites waiting
+/// Unattended sync in the pair's direction: executes new files, conflicts (keeping both versions)
+/// and the deletes and overwrites that pass [`auto_safe`]. One-way, this means files added or
+/// changed on the receiving side are never deleted or replaced without asking. Returns (report, number of deletes/overwrites waiting
 /// for confirmation).
 pub fn auto_sync(cfg: &Config, pair: &Pair) -> Result<(Report, usize)> {
     if !has_synced(pair) {
         bail!("[{}] Auto-sync needs one manual sync first", pair.label());
     }
-    let mut p = plan(cfg, pair, Mode::TwoWay)?;
+    let mut p = plan(cfg, pair, pair.direction())?;
     let st = load_state(pair);
     let mut pending = 0;
     for i in p.items.iter_mut() {
@@ -1159,6 +1160,90 @@ mod tests {
         fs::create_dir_all(&r).unwrap();
         let e = plan(&cfg, &pair, Mode::TwoWay).unwrap_err().to_string();
         assert!(e.contains("Remote folder is empty"), "{e}");
+
+        reset_state(&pair);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn direction_keeps_two_way_signature() {
+        let mut pair = Pair { local: "/l".into(), remote: "r:x".into(), ..Default::default() };
+        assert_eq!(pair.signature(), "/l|r:x|", "two-way: same as before directions existed");
+        pair.direction = Mode::Push;
+        assert_eq!(pair.signature(), "/l|r:x||push");
+        pair.direction = Mode::Diff;
+        assert_eq!(pair.direction(), Mode::TwoWay, "invalid direction counts as two-way");
+    }
+
+    /// One-way auto-sync (this computer ➡ cloud) with the real rclone binary.
+    /// Run with: cargo test -- --ignored --test-threads=1
+    #[test]
+    #[ignore]
+    fn one_way_auto_sync() {
+        use std::fs;
+        let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let _ = fs::create_dir_all(exe_dir.join(crate::config::PORTABLE_DIR));
+        assert!(dirs().portable);
+
+        let base = std::env::temp_dir().join(format!("draisine-oneway-{}", std::process::id()));
+        let (l, r) = (base.join("local"), base.join("remote"));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&l).unwrap();
+        fs::create_dir_all(&r).unwrap();
+        let w = |p: &Path, s: &str| fs::write(p, s).unwrap();
+        let read = |p: &Path| fs::read_to_string(p).unwrap();
+        w(&l.join("a.txt"), "a");
+        w(&l.join("b.txt"), "b");
+        w(&l.join("c.txt"), "c");
+        w(&l.join("keep.txt"), "keep");
+        for i in 0..10 {
+            w(&l.join(format!("filler{i}.txt")), "f"); // stay below the mass deletion guard
+        }
+
+        let cfg = Config::default();
+        let pair = Pair {
+            name: "oneway".into(),
+            local: l.display().to_string(),
+            remote: r.display().to_string(),
+            direction: Mode::Push,
+            auto_sync: true,
+            ..Default::default()
+        };
+        let acts = |p: &Plan| -> Vec<(String, Action)> { p.items.iter().map(|i| (i.path.clone(), i.action)).collect() };
+
+        // First sync by hand, then auto-sync is allowed.
+        assert!(auto_sync(&cfg, &pair).is_err(), "auto-sync needs one manual sync first");
+        let p = plan(&cfg, &pair, pair.direction()).unwrap();
+        assert!(execute(&cfg, &p, &mut |_| {}).unwrap().failed.is_empty());
+        assert!(has_synced(&pair));
+
+        // Local changes lead: auto-sync uploads, overwrites and deletes in the cloud.
+        // A file added in the cloud and a cloud edit of an unchanged file are held back.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        w(&l.join("a.txt"), "a2-changed");
+        fs::remove_file(l.join("b.txt")).unwrap();
+        w(&l.join("new.txt"), "new");
+        w(&r.join("cloud-only.txt"), "cloud");
+        w(&r.join("keep.txt"), "edited in the cloud");
+        let (rep, pending) = auto_sync(&cfg, &pair).unwrap();
+        assert!(rep.failed.is_empty(), "{:?}", rep.failed);
+        assert_eq!(read(&r.join("a.txt")), "a2-changed", "uploads changes");
+        assert!(!r.join("b.txt").exists(), "deletes in the cloud what was deleted here");
+        assert_eq!(read(&r.join("new.txt")), "new", "uploads new files");
+        assert_eq!(read(&r.join("cloud-only.txt")), "cloud", "a file added in the cloud is not deleted");
+        assert_eq!(read(&r.join("keep.txt")), "edited in the cloud", "a cloud edit is not replaced");
+        assert!(!l.join("cloud-only.txt").exists(), "nothing is downloaded");
+        assert_eq!(pending, 2);
+        assert_eq!(load_state(&pair).pending, Pending { deletes: 1, overwrites: 1 }, "held back for the overview");
+        let p = plan(&cfg, &pair, Mode::Push).unwrap();
+        assert_eq!(
+            acts(&p),
+            vec![("cloud-only.txt".into(), Action::DeleteRemote), ("keep.txt".into(), Action::OverwriteRemote)]
+        );
+
+        // Two-way history is separate: switching the direction starts over.
+        let two = Pair { direction: Mode::TwoWay, ..pair.clone() };
+        assert!(!has_synced(&two));
 
         reset_state(&pair);
         let _ = fs::remove_dir_all(&base);
