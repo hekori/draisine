@@ -4,6 +4,7 @@ use super::Bg;
 use super::browser::RemoteBrowser;
 use super::theme::{self, pal};
 use crate::config::{Config, Pair};
+use crate::engine::Mode;
 use crate::log;
 use crate::rclone::Rclone;
 use eframe::egui::{self, RichText, Ui, vec2};
@@ -143,6 +144,7 @@ pub struct Wizard {
     local: String,
     browser: RemoteBrowser,
     pair_name: String,
+    direction: Mode,
     created_pair: Option<String>,
     /// Started via "new connection": do not preselect an existing one.
     prefer_new: bool,
@@ -166,6 +168,7 @@ impl Wizard {
             local: String::new(),
             browser: RemoteBrowser::new("", ""),
             pair_name: String::new(),
+            direction: Mode::TwoWay,
             created_pair: None,
             prefer_new,
         }
@@ -388,8 +391,9 @@ impl Wizard {
             Step::Folders => {
                 let local = self.local.trim().to_string();
                 let name = if self.pair_name.trim().is_empty() { default_pair_name(&local) } else { self.pair_name.trim().into() };
-                let pair = Pair { name, local, remote: self.browser.full(), ..Default::default() };
-                log::info(format!("Folder pair created: {} ({} ↔ {})", pair.label(), pair.local, pair.remote));
+                let pair = Pair { name, local, remote: self.browser.full(), direction: self.direction, ..Default::default() };
+                let arrow = direction_arrow(pair.direction());
+                log::info(format!("Folder pair created: {} ({} {arrow} {})", pair.label(), pair.local, pair.remote));
                 self.created_pair = Some(pair.id.clone());
                 cfg.pairs.push(pair);
                 if let Err(e) = cfg.save() {
@@ -764,6 +768,9 @@ impl Wizard {
         let shown = if self.browser.path.is_empty() { format!("{} (top level)", self.browser.full()) } else { self.browser.full() };
         ui.label(RichText::new(format!("Selected: {shown}")).color(p.accent));
         ui.add_space(10.0);
+        ui.label(theme::bold("Direction", 15.0));
+        super::direction_picker(ui, &mut self.direction);
+        ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.label("Folder pair name");
             ui.add(egui::TextEdit::singleline(&mut self.pair_name).desired_width(240.0).hint_text("e.g. Taxes"));
@@ -776,7 +783,7 @@ impl Wizard {
             ui.label(RichText::new("✔").size(44.0).color(p.green));
             ui.label(theme::bold("All set!", 26.0));
             if let Some(pair) = cfg.pairs.last() {
-                ui.label(theme::muted(ui, format!("{}  ↔  {}", pair.local, pair.remote)));
+                ui.label(theme::muted(ui, format!("{}  {}  {}", pair.local, direction_arrow(pair.direction()), pair.remote)));
             }
         });
         ui.add_space(14.0);
@@ -792,6 +799,15 @@ impl Wizard {
                  side changed since the last sync; anything unclear waits for you.",
             ));
         });
+    }
+}
+
+/// Arrow between “local” and “remote” for a direction.
+fn direction_arrow(d: Mode) -> &'static str {
+    match d {
+        Mode::Pull => "⬅",
+        Mode::Push => "➡",
+        _ => "↔",
     }
 }
 

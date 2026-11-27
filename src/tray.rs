@@ -1,6 +1,7 @@
 //! Tray process: tray icon + menu, and the auto-sync worker.
 //!
-//! Auto-sync runs a two-way sync for each pair that has auto-sync on and has been synced manually at
+//! Auto-sync syncs each pair in its own direction (two-way, or one-way cloud ➡ computer or
+//! computer ➡ cloud) if it has auto-sync on and has been synced manually at
 //! least once (see `engine::auto_sync_active`), every N minutes as set per pair, unless it is paused
 //! from the tray menu. It applies new files and conflicts (➡ conflict files), and deletes and
 //! overwrites where only one side changed and the other matches the sync history
@@ -495,7 +496,7 @@ pub fn run() -> Result<()> {
         diff: MenuItem::new("Diff local ↔ remote …", true, None),
         pull: MenuItem::new("One-way sync remote ➡ local …", true, None),
         push: MenuItem::new("One-way sync local ➡ remote …", true, None),
-        twoway: MenuItem::new("Two-way sync local ↔ remote …", true, None),
+        twoway: MenuItem::new("Sync all …", true, None),
         pause: CheckMenuItem::new("Pause auto-sync", true, cfg.auto_sync_paused, None),
         run_now: MenuItem::new("Run auto-sync now", true, None),
         logs: MenuItem::new("Open log (TXT)", true, None),

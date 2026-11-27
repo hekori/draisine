@@ -306,12 +306,23 @@ pub fn sides(ui: &mut Ui, p: &Pal, plan: &Plan, selectable: bool) -> Cols {
         (c.l, "💻  This computer", &plan.pair.local, plan.local_files),
         (c.r, "☁  Cloud", &plan.pair.remote, plan.remote_files),
     ];
-    for (rect, title, path, n) in sides {
+    for (i, (rect, title, path, n)) in sides.into_iter().enumerate() {
         let mut cu = child(ui, rect.shrink2(vec2(0.0, 2.0)), Layout::top_down(egui::Align::Min));
         cu.spacing_mut().item_spacing.y = 2.0;
         cu.label(theme::bold(title, 13.0).color(p.muted));
-        cu.add(egui::Label::new(RichText::new(format!("{}  ·  {n} files", theme::short_path(path))).size(12.0).color(p.muted)).truncate())
-            .on_hover_text(path.as_str());
+        let label = egui::Label::new(RichText::new(format!("{}  ·  {n} files", theme::short_path(path))).size(12.0).color(p.muted)).truncate();
+        if i == 0 {
+            // Local side: click opens the folder in the file manager.
+            let r = cu
+                .add(label.sense(Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(format!("{path}\nClick to open in the file manager"));
+            if r.clicked() {
+                theme::open_folder(path);
+            }
+        } else {
+            cu.add(label).on_hover_text(path.as_str());
+        }
     }
     c
 }

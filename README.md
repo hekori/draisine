@@ -6,7 +6,8 @@ Tray app for safely syncing local folders with Google Drive, OneDrive, Dropbox a
 - **Diff** local ↔ remote
 - **One-way sync** remote ➡ local and local ➡ remote (mirroring)
 - **Two-way sync** local ↔ remote
-- **Auto-sync** per folder pair with its own interval (two-way, in the background), available once the pair has been synced by hand; pause it for all pairs from the tray menu
+- **Direction per folder pair**: two-way, or one-way (this computer mirrors the cloud, or the cloud mirrors this computer); *Sync* and auto-sync follow it
+- **Auto-sync** per folder pair with its own interval (in the background, in the pair's direction), available once the pair has been synced by hand; pause it for all pairs from the tray menu
 
 A single executable, no installation. The release archive ships the matching rclone right next to it.
 Linux (KDE, GNOME with the AppIndicator extension, …), Windows, macOS.
@@ -36,7 +37,7 @@ Alternatively, build it yourself from the PKGBUILD: `git clone https://github.co
 | Conflict (changed on both sides) | Like Dropbox: the cloud version keeps the name, the local version is kept next to it on both sides as `name (<computer>'s conflicted copy YYYY-MM-DD).ext`. |
 | Rename (two-way) | A file deleted and a file created on the same side with the same size and content hash count as a rename, which is repeated on the other side instead of delete + copy. Ambiguous cases (several files with the same content) fall back to delete + copy. |
 | Preview | *Changes* shows both sides next to each other (`+` created, `−` removed, `~` replaced or renamed, `⚠` conflict) with the reason; *Compare* shows a line diff for text files. *Result* lists the files after applying and where their content comes from. |
-| Auto-sync | Switched on per folder pair, and only after that pair's first sync was done by hand (changing its folders or excludes, or resetting its sync state, turns it off again). Each pair has its own interval; "Pause auto-sync" in the tray menu stops it for all pairs. Applies new files and conflicts, and deletes and overwrites when it is clear which side changed: the file was in sync at the last sync, the other side still has exactly the recorded size and modification time, and the changed side was deleted or has a newer modification time than recorded (deletes held back by the mass deletion guard don't count). All other deletes and overwrites wait: the tray icon turns orange, a notification appears, the folder pair's card shows what is waiting with a *Review* button, and the tray menu gets a *Review …* entry; both open the two-way preview. |
+| Auto-sync | Runs in the folder pair's direction. Switched on per folder pair, and only after that pair's first sync was done by hand (changing its folders, excludes or direction, or resetting its sync state, turns it off again). Each pair has its own interval; "Pause auto-sync" in the tray menu stops it for all pairs. Applies new files and conflicts, and deletes and overwrites when it is clear which side changed: the file was in sync at the last sync, the other side still has exactly the recorded size and modification time, and the changed side was deleted or has a newer modification time than recorded (deletes held back by the mass deletion guard don't count). All other deletes and overwrites wait: the tray icon turns orange, a notification appears, the folder pair's card shows what is waiting with a *Review* button, and the tray menu gets a *Review …* entry; both open the preview. One-way, this means files added or changed on the receiving side (e.g. in the cloud of a "this computer ➡ cloud" pair) are never deleted or replaced without your OK. |
 | Stale preview | Everything is compared again before applying. If a selected action has changed, nothing is applied. |
 | One side empty or missing | Stops if there were files there at the last sync (e.g. drive not mounted). |
 | Mass deletion | Above a configurable share (default 25 %) deletions are not preselected, and a warning is shown. |
@@ -106,8 +107,8 @@ The window runs as a separate process. The tray starts it when needed, and an op
 
 | | Linux | Windows | macOS |
 |---|---|---|---|
-| Configuration | `~/.config/draisine/config.toml` | `%APPDATA%\hekori\draisine\config\config.toml` | `~/Library/Application Support/de.hekori.draisine/config.toml` |
-| State, logs | `~/.local/share/draisine/{state,logs}` | `%APPDATA%\hekori\draisine\data\…` | `~/Library/Application Support/de.hekori.draisine/…` |
+| Configuration | `~/.config/draisine/config.toml` | `%APPDATA%\hekori\draisine\config\config.toml` | `~/Library/Application Support/com.hekori.draisine/config.toml` |
+| State, logs | `~/.local/share/draisine/{state,logs}` | `%APPDATA%\hekori\draisine\data\…` | `~/Library/Application Support/com.hekori.draisine/…` |
 
 **Portable mode:** if there is a `draisine-data` folder next to the program, everything is stored there. An `rclone.conf` next to the program is used automatically.
 

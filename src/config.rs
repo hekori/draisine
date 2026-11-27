@@ -4,6 +4,7 @@
 //! logs are stored there, so the whole app (binary + rclone + data) lives in one folder.
 //! Otherwise the OS standard directories are used.
 
+use crate::engine::Mode;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -44,8 +45,9 @@ pub fn dirs() -> &'static Dirs {
                 portable: true,
             }
         } else {
-            let pd = directories::ProjectDirs::from("de", "hekori", "draisine")
+            let pd = directories::ProjectDirs::from("com", "hekori", "draisine")
                 .expect("no home directory");
+            migrate_old_dirs(&pd);
             Dirs {
                 config_file: pd.config_dir().join("config.toml"),
                 state_dir: pd.data_dir().join("state"),
@@ -60,6 +62,23 @@ pub fn dirs() -> &'static Dirs {
         }
         d
     })
+}
+
+/// Before 0.1.3 the qualifier was "de". Only macOS puts it in the path
+/// (`~/Library/Application Support/de.hekori.draisine`); move that folder over once.
+fn migrate_old_dirs(new: &directories::ProjectDirs) {
+    let Some(old) = directories::ProjectDirs::from("de", "hekori", "draisine") else { return };
+    for (from, to) in [(old.config_dir(), new.config_dir()), (old.data_dir(), new.data_dir())] {
+        if from == to || !from.is_dir() || to.exists() {
+            continue;
+        }
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::rename(from, to) {
+            eprintln!("Could not move {} to {}: {e}", from.display(), to.display());
+        }
+    }
 }
 
 /// One local folder <-> one remote folder.
@@ -83,6 +102,9 @@ pub struct Pair {
     pub auto_sync: bool,
     /// Auto-sync runs this pair every N minutes.
     pub interval_minutes: u32,
+    /// What “Sync” and auto-sync do for this pair: `TwoWay`, `Pull` (the computer mirrors the
+    /// cloud) or `Push` (the cloud mirrors the computer). See [`Pair::direction`].
+    pub direction: Mode,
 }
 
 impl Default for Pair {
@@ -96,6 +118,7 @@ impl Default for Pair {
             remote_backup: String::new(),
             auto_sync: false,
             interval_minutes: DEFAULT_INTERVAL,
+            direction: Mode::TwoWay,
         }
     }
 }
@@ -110,8 +133,22 @@ impl Pair {
     }
 
     /// Changes in these fields invalidate the stored sync state.
+    /// Identifies the sync history: changing folders, excludes or the direction starts over.
+    /// Two-way keeps the signature it had before directions existed, so old state stays valid.
     pub fn signature(&self) -> String {
-        format!("{}|{}|{}", self.local, self.remote, self.excludes.join("\u{1f}"))
+        let s = format!("{}|{}|{}", self.local, self.remote, self.excludes.join("\u{1f}"));
+        match self.direction() {
+            Mode::TwoWay => s,
+            d => format!("{s}|{}", d.arg()),
+        }
+    }
+
+    /// The pair's sync direction (anything invalid, like `Diff`, counts as two-way).
+    pub fn direction(&self) -> Mode {
+        match self.direction {
+            Mode::Pull | Mode::Push => self.direction,
+            _ => Mode::TwoWay,
+        }
     }
 }
 
