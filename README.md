@@ -12,6 +12,12 @@ Tray app for safely syncing local folders with Google Drive, OneDrive, Dropbox a
 A single executable, no installation. The release archive ships the matching rclone right next to it.
 Linux (KDE, GNOME with the AppIndicator extension, …), Windows, macOS.
 
+![Sync preview: this computer and the cloud side by side, every change with its reason](docs/img/changes.webp)
+
+| Overview | Result of a sync | Setup assistant |
+|---|---|---|
+| [![Overview with folder pairs, auto-sync and a change waiting for confirmation](docs/img/overview.webp)](docs/img/overview.webp) | [![Preview, Result tab: every file after the sync and where it comes from](docs/img/result.webp)](docs/img/result.webp) | [![Setup assistant: choosing the cloud provider](docs/img/setup.webp)](docs/img/setup.webp) |
+
 ## Installation
 
 Download the archive for your system from the [releases](https://github.com/hekori/draisine/releases/latest), unpack it and start `draisine`.

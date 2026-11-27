@@ -86,6 +86,10 @@
 
   .shot { margin: 0; }
   .shot img { display: block; width: 100%; max-width: 980px; height: auto; margin: 0 auto; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; margin-top: 32px; }
+  .gallery img { max-width: 100%; }
+  .gallery figcaption { font-size: 15px; color: var(--muted); margin-top: 6px; padding: 0 4%; }
+  .gallery figcaption strong { color: var(--text); }
 
   /* decision table */
   .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -152,12 +156,29 @@
 <main>
   <section id="screenshot">
     <div class="wrap">
-      <h2>See the result before anything changes</h2>
-      <p class="sub">The preview shows every file after the sync and where its content will come from: this computer, the cloud, a rename, or a conflict copy. Deleted files are crossed out and go to the trash.</p>
+      <h2>See every change before it happens</h2>
+      <p class="sub">The preview puts this computer and the cloud side by side. Every file that is added, changed, renamed, deleted or in conflict is listed with the reason, and you can untick anything you don't want. Text files can be compared line by line.</p>
       <figure class="shot">
-        <a href="img/result.webp"><img src="img/result.webp" width="1250" height="918" loading="lazy"
-             alt="Draisine's sync preview, Result tab: a list of files in the Documents folder showing which come from this computer, which from the cloud, one renamed file, one file moved to the trash and one conflict copy. Buttons at the bottom: Cancel, Check again, Apply 7 changes."></a>
+        <a href="img/changes.webp"><img src="img/changes.webp" width="1250" height="918" loading="lazy"
+             alt="Draisine's sync preview, Changes tab, for the Documents folder: this computer and the cloud side by side. A new meeting note on this computer, a draft deleted locally that will be deleted in the cloud, a recipe changed in the cloud, a report renamed in the cloud, a new budget file in the cloud, a thesis chapter changed locally, and todo.txt changed on both sides as a conflict. Buttons at the bottom: Cancel, Check again, Apply 7 changes."></a>
       </figure>
+      <div class="gallery">
+        <figure class="shot">
+          <a href="img/result.webp"><img src="img/result.webp" width="1250" height="918" loading="lazy"
+               alt="The same preview on the Result tab: every file after the sync and where its content comes from, such as from this computer, from the cloud, renamed from report.pdf, or a conflicted copy of todo.txt. Deleted files are crossed out."></a>
+          <figcaption><strong>Result.</strong> Every file after the sync and where its content will come from. Deleted files are crossed out and go to the trash or a backup folder.</figcaption>
+        </figure>
+        <figure class="shot">
+          <a href="img/overview.webp"><img src="img/overview.webp" width="1250" height="918" loading="lazy"
+               alt="Draisine's overview with the folder pairs Documents (two-way with Google Drive) and Photos (one-way to OneDrive), each with last sync time, auto-sync switch and interval. Documents shows a note: 1 change waiting for your confirmation, with a Review button."></a>
+          <figcaption><strong>Overview.</strong> Each folder pair has its own direction and auto-sync interval. Changes that need your OK are flagged with a <em>Review</em> button.</figcaption>
+        </figure>
+        <figure class="shot">
+          <a href="img/setup.webp"><img src="img/setup.webp" width="1250" height="918" loading="lazy"
+               alt="The setup assistant, step 3 of 6: Which cloud storage do you want to connect? Choices: Google Drive, OneDrive, Dropbox, pCloud, Box, S3, WebDAV, SFTP and Other."></a>
+          <figcaption><strong>Setup assistant.</strong> Pick your cloud, sign in in the browser, choose the folders. Google Drive, OneDrive, Dropbox, S3, WebDAV, SFTP and more.</figcaption>
+        </figure>
+      </div>
     </div>
   </section>
 
