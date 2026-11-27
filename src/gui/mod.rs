@@ -737,7 +737,7 @@ impl App {
                             .on_hover_text("Compare, one-way sync, edit, remove, …");
                         });
                     });
-                    theme::path_line(ui, "💻", &pair.local);
+                    theme::folder_line(ui, "💻", &pair.local);
                     theme::path_line(ui, "☁", &pair.remote);
                     if pair.direction() != Mode::TwoWay {
                         ui.label(RichText::new(direction_text(pair.direction()).0).size(13.0).color(p.accent))

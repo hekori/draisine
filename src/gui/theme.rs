@@ -370,6 +370,27 @@ pub fn path_line(ui: &mut Ui, icon: &str, path: &str) -> Response {
         .on_hover_text(path)
 }
 
+/// Like [`path_line`], but a local folder: clicking opens it in the system file manager
+/// (Dolphin/Nautilus/…, Explorer, Finder).
+pub fn folder_line(ui: &mut Ui, icon: &str, path: &str) -> Response {
+    let r = ui
+        .add(egui::Label::new(RichText::new(format!("{icon}  {}", short_path(path))).color(pal(ui).muted)).truncate().sense(Sense::click()))
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text(format!("{path}\nClick to open in the file manager"));
+    if r.clicked() {
+        open_folder(path);
+    }
+    r
+}
+
+/// Opens a local folder in the system file manager.
+pub fn open_folder(path: &str) {
+    let dir = crate::engine::expand_home(path);
+    if let Err(e) = open::that_detached(&dir) {
+        crate::log::warn(format!("Could not open folder {dir}: {e}"));
+    }
+}
+
 /// `path` with the home directory shortened to `~`.
 pub fn short_path(path: &str) -> String {
     if let Some(h) = directories::UserDirs::new() {
