@@ -52,7 +52,7 @@ if [[ $OS == macos ]]; then
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>Draisine</string>
-  <key>CFBundleIdentifier</key><string>de.hekori.draisine</string>
+  <key>CFBundleIdentifier</key><string>com.hekori.draisine</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleExecutable</key><string>draisine</string>

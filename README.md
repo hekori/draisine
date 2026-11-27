@@ -107,8 +107,8 @@ The window runs as a separate process. The tray starts it when needed, and an op
 
 | | Linux | Windows | macOS |
 |---|---|---|---|
-| Configuration | `~/.config/draisine/config.toml` | `%APPDATA%\hekori\draisine\config\config.toml` | `~/Library/Application Support/de.hekori.draisine/config.toml` |
-| State, logs | `~/.local/share/draisine/{state,logs}` | `%APPDATA%\hekori\draisine\data\…` | `~/Library/Application Support/de.hekori.draisine/…` |
+| Configuration | `~/.config/draisine/config.toml` | `%APPDATA%\hekori\draisine\config\config.toml` | `~/Library/Application Support/com.hekori.draisine/config.toml` |
+| State, logs | `~/.local/share/draisine/{state,logs}` | `%APPDATA%\hekori\draisine\data\…` | `~/Library/Application Support/com.hekori.draisine/…` |
 
 **Portable mode:** if there is a `draisine-data` folder next to the program, everything is stored there. An `rclone.conf` next to the program is used automatically.
 

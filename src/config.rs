@@ -45,8 +45,9 @@ pub fn dirs() -> &'static Dirs {
                 portable: true,
             }
         } else {
-            let pd = directories::ProjectDirs::from("de", "hekori", "draisine")
+            let pd = directories::ProjectDirs::from("com", "hekori", "draisine")
                 .expect("no home directory");
+            migrate_old_dirs(&pd);
             Dirs {
                 config_file: pd.config_dir().join("config.toml"),
                 state_dir: pd.data_dir().join("state"),
@@ -61,6 +62,23 @@ pub fn dirs() -> &'static Dirs {
         }
         d
     })
+}
+
+/// Before 0.1.3 the qualifier was "de". Only macOS puts it in the path
+/// (`~/Library/Application Support/de.hekori.draisine`); move that folder over once.
+fn migrate_old_dirs(new: &directories::ProjectDirs) {
+    let Some(old) = directories::ProjectDirs::from("de", "hekori", "draisine") else { return };
+    for (from, to) in [(old.config_dir(), new.config_dir()), (old.data_dir(), new.data_dir())] {
+        if from == to || !from.is_dir() || to.exists() {
+            continue;
+        }
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::rename(from, to) {
+            eprintln!("Could not move {} to {}: {e}", from.display(), to.display());
+        }
+    }
 }
 
 /// One local folder <-> one remote folder.
