@@ -687,14 +687,29 @@ impl App {
         let mut action: Option<(Option<Mode>, String)> = None;
         let (mut toggled, mut save_edit, mut cancel_edit) = (false, false, false);
         let (mut start_edit, mut reset) = (None, None);
+        // Drag to reorder: only by the handle, and not while a pair is edited or being removed
+        // (both refer to pairs by index).
+        let can_reorder = self.edit.is_none() && self.delete_pair.is_none() && self.cfg.pairs.len() > 1;
+        let dragging = egui::DragAndDrop::payload::<DragPair>(&ctx).map(|d| d.0).filter(|_| can_reorder);
+        let mut moved: Option<(usize, usize)> = None; // (from, insertion slot 0..=len)
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            let mut spans = Vec::with_capacity(self.cfg.pairs.len()); // (top, bottom) of each card
             for (i, pair) in self.cfg.pairs.iter_mut().enumerate() {
+                let top = ui.cursor().top();
                 theme::card(ui, |ui| {
                     if let Some(ed) = self.edit.as_mut().filter(|e| e.index == i) {
                         (save_edit, cancel_edit) = edit_form(ui, &p, ed, pair, &remotes, &cfg_snapshot);
                         return;
                     }
                     ui.horizontal(|ui| {
+                        if can_reorder {
+                            let handle = RichText::new("\u{F01DD}").font(theme::icon_font(20.0)).color(p.muted);
+                            let h = ui.add(egui::Label::new(handle).selectable(false).sense(egui::Sense::drag()));
+                            h.dnd_set_drag_payload(DragPair(i));
+                            if dragging.is_none() {
+                                h.on_hover_text("Drag to reorder");
+                            }
+                        }
                         ui.label(theme::bold(pair.label(), 17.0));
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                             let id = pair.id.clone();
@@ -843,9 +858,22 @@ impl App {
                         }
                     }
                 });
+                spans.push((top, ui.min_rect().bottom()));
                 ui.add_space(4.0);
             }
+            if let Some(from) = dragging {
+                drag_feedback(ui, &p, &spans, from, &mut moved);
+            }
         });
+        if let Some((from, slot)) = moved {
+            let to = if slot > from { slot - 1 } else { slot };
+            if to != from {
+                let pair = self.cfg.pairs.remove(from);
+                log::info(format!("Folder pair moved: {} (position {} → {})", pair.label(), from + 1, to + 1));
+                self.cfg.pairs.insert(to, pair);
+                self.save();
+            }
+        }
         if toggled {
             self.save();
         }
@@ -1677,6 +1705,46 @@ impl eframe::App for App {
 }
 
 /// "next check in 4:32", "next check in 1 h 05 min", "next check due now".
+/// Drag-and-drop payload on the overview: index of the folder pair being dragged.
+struct DragPair(usize);
+
+/// While a pair card is dragged: dims it, shows where it would land, scrolls near the edges
+/// and, on release, reports `(from, insertion slot)`. `spans`: (top, bottom) of each card.
+fn drag_feedback(ui: &mut Ui, p: &Pal, spans: &[(f32, f32)], from: usize, moved: &mut Option<(usize, usize)>) {
+    let Some(pos) = ui.ctx().pointer_latest_pos() else { return };
+    let slot = spans.iter().filter(|(t, b)| (t + b) / 2.0 < pos.y).count();
+    let x = ui.min_rect().x_range();
+    if let Some(&(t, b)) = spans.get(from) {
+        let rect = egui::Rect::from_x_y_ranges(x, t..=b);
+        ui.painter().rect_filled(rect, 12, p.accent.gamma_multiply(0.10));
+    }
+    if slot != from && slot != from + 1 {
+        let y = match slot {
+            0 => spans[0].0 - 2.0,
+            s => spans[s - 1].1 + 2.0,
+        };
+        ui.painter().hline(x, y, egui::Stroke::new(3.0, p.accent));
+    }
+    // Auto-scroll when held near the top or bottom edge of the list.
+    let clip = ui.clip_rect();
+    const EDGE: f32 = 40.0;
+    let dy = if pos.y < clip.top() + EDGE {
+        8.0
+    } else if pos.y > clip.bottom() - EDGE {
+        -8.0
+    } else {
+        0.0
+    };
+    if dy != 0.0 {
+        ui.scroll_with_delta(vec2(0.0, dy));
+    }
+    ui.ctx().request_repaint();
+    if ui.input(|i| i.pointer.any_released()) {
+        egui::DragAndDrop::clear_payload(ui.ctx());
+        *moved = Some((from, slot));
+    }
+}
+
 fn next_check_text(at: u64) -> String {
     let left = at.saturating_sub(ipc::unix_now());
     match left {
